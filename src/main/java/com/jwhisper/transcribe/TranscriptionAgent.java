@@ -76,6 +76,21 @@ public final class TranscriptionAgent implements AutoCloseable {
         return future;
     }
 
+    public CompletableFuture<Void> preload(ModelDescriptor model) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        executorService.execute(() -> {
+            try {
+                if (model != null && modelManagerAgent.isInstalled(model)) {
+                    whisperEngineAgent.loadModel(model, modelManagerAgent.modelRoot(model));
+                }
+                future.complete(null);
+            } catch (Throwable e) {
+                future.completeExceptionally(e);
+            }
+        });
+        return future;
+    }
+
     public void cancel() {
         whisperEngineAgent.cancel();
         Future<?> task = currentTask.getAndSet(null);

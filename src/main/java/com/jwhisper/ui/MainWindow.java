@@ -4,7 +4,12 @@ import com.jwhisper.audio.AudioInputAgent;
 import com.jwhisper.audio.AudioJob;
 import com.jwhisper.audio.AudioValidationResult;
 import com.jwhisper.deps.DependencyReport;
+import com.jwhisper.model.ModelCatalog;
 import com.jwhisper.model.ModelDescriptor;
+import com.jwhisper.model.ModelDownloadListener;
+import com.jwhisper.model.ModelDownloadService;
+import com.jwhisper.model.ModelDownloadState;
+import com.jwhisper.model.ModelDownloadStatus;
 import com.jwhisper.model.ModelManagerAgent;
 import com.jwhisper.transcribe.TranscriptionAgent;
 import com.jwhisper.transcribe.TranscriptionListener;
@@ -13,11 +18,13 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.DefaultComboBoxModel;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
@@ -26,10 +33,8 @@ import javax.swing.JSeparator;
 import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
@@ -40,20 +45,25 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletionException;
 
 public final class MainWindow extends JFrame {
-    private static final Color BACKGROUND = new Color(246, 247, 249);
-    private static final Color TEXT = new Color(48, 55, 68);
-    private static final Color MUTED = new Color(119, 128, 143);
-
     private final ModelManagerAgent modelManagerAgent;
+    private final ModelDownloadService downloadService;
     private final AudioInputAgent audioInputAgent;
     private final TranscriptionAgent transcriptionAgent;
     private final DependencyReport dependencyReport;
+    private final UiTheme theme = UiTheme.current();
+    private final Set<String> preloadStarted = new HashSet<>();
+    private final ModelDownloadListener downloadListener = state -> SwingUtilities.invokeLater(() -> {
+        refreshModels();
+        handleDownloadState(state);
+    });
 
-    private final JComboBox<ModelDescriptor> modelCombo = new JComboBox<>();
+    private final JComboBox<ModelComboItem> modelCombo = new JComboBox<>();
     private final JButton manageModelsButton = new JButton("Manage models...");
     private final PlaceholderTextArea transcriptArea = new PlaceholderTextArea("Your transcript will appear here.");
     private final JProgressBar progressBar = new JProgressBar(0, 100);
@@ -62,28 +72,36 @@ public final class MainWindow extends JFrame {
     private final JButton saveButton = new JButton("Save as file...");
     private final JButton cancelButton = new JButton("Cancel");
     private final DropZonePanel dropZone;
+    private boolean transcribing;
 
     public MainWindow(
             ModelManagerAgent modelManagerAgent,
+            ModelDownloadService downloadService,
             AudioInputAgent audioInputAgent,
             TranscriptionAgent transcriptionAgent,
             DependencyReport dependencyReport
     ) {
         super("jwhisper");
         this.modelManagerAgent = modelManagerAgent;
+        this.downloadService = downloadService;
         this.audioInputAgent = audioInputAgent;
         this.transcriptionAgent = transcriptionAgent;
         this.dependencyReport = dependencyReport;
         this.dropZone = new DropZonePanel(this::chooseAudioFile, this::handleDroppedFiles);
+        this.dropZone.setTheme(theme);
+        this.transcriptArea.setTheme(theme);
 
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setContentPane(buildContent());
+        modelCombo.setRenderer(new ModelComboRenderer());
+        modelCombo.addActionListener(event -> handleModelSelection());
+        downloadService.addListener(downloadListener);
         refreshModels();
         wireActions();
         setWorking(false);
         pack();
-        setMinimumSize(new Dimension(760, 560));
-        setSize(new Dimension(920, 610));
+        setMinimumSize(new Dimension(720, 520));
+        setSize(new Dimension(880, 560));
         setLocationRelativeTo(null);
     }
 
@@ -92,49 +110,43 @@ public final class MainWindow extends JFrame {
             JOptionPane.showMessageDialog(this, dependencyReport.firstUserMessage(), "jwhisper", JOptionPane.WARNING_MESSAGE);
         }
         if (modelCombo.getItemCount() == 0) {
-            int choice = JOptionPane.showOptionDialog(
-                    this,
-                    "No models installed.",
-                    "jwhisper",
-                    JOptionPane.DEFAULT_OPTION,
-                    JOptionPane.INFORMATION_MESSAGE,
-                    null,
-                    new Object[]{"Download a model...", "Not now"},
-                    "Download a model..."
-            );
-            if (choice == 0) {
-                openModelManager();
-            }
+            startInitialTinySetup();
         }
     }
 
     private JPanel buildContent() {
         JPanel root = new JPanel(new BorderLayout());
-        root.setBackground(BACKGROUND);
+        root.setBackground(theme.background());
 
         JPanel content = new JPanel();
         content.setOpaque(false);
-        content.setBorder(BorderFactory.createEmptyBorder(28, 28, 24, 28));
+        content.setBorder(BorderFactory.createEmptyBorder(24, 26, 22, 26));
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
         root.add(content, BorderLayout.CENTER);
 
         content.add(sectionHeader("Model"));
         content.add(modelRow());
-        content.add(Box.createVerticalStrut(24));
+        content.add(Box.createVerticalStrut(22));
 
         content.add(sectionHeader("Audio"));
         dropZone.setAlignmentX(Component.LEFT_ALIGNMENT);
         content.add(dropZone);
-        content.add(Box.createVerticalStrut(24));
+        content.add(Box.createVerticalStrut(22));
 
         content.add(sectionHeader("Transcript"));
         JScrollPane transcriptScroll = new JScrollPane(transcriptArea);
         transcriptScroll.setAlignmentX(Component.LEFT_ALIGNMENT);
-        transcriptScroll.setPreferredSize(new Dimension(820, 130));
-        transcriptScroll.setMinimumSize(new Dimension(480, 120));
-        transcriptArea.setFont(transcriptArea.getFont().deriveFont(Font.PLAIN, 16f));
-        transcriptArea.setForeground(TEXT);
-        transcriptArea.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
+        transcriptScroll.setPreferredSize(new Dimension(820, 122));
+        transcriptScroll.setMinimumSize(new Dimension(480, 112));
+        transcriptScroll.setBorder(BorderFactory.createLineBorder(theme.fieldBorder()));
+        transcriptScroll.getViewport().setBackground(theme.field());
+        transcriptArea.setFont(transcriptArea.getFont().deriveFont(Font.PLAIN, 14f));
+        transcriptArea.setForeground(theme.text());
+        transcriptArea.setBackground(theme.field());
+        transcriptArea.setCaretColor(theme.text());
+        transcriptArea.setSelectionColor(theme.accent());
+        transcriptArea.setSelectedTextColor(theme.accentText());
+        transcriptArea.setBorder(BorderFactory.createEmptyBorder(12, 14, 12, 14));
         content.add(transcriptScroll);
         content.add(Box.createVerticalStrut(12));
 
@@ -154,15 +166,17 @@ public final class MainWindow extends JFrame {
         constraints.insets = new Insets(0, 0, 0, 12);
         constraints.anchor = GridBagConstraints.WEST;
         JLabel label = new JLabel("Whisper model:");
-        label.setForeground(TEXT);
-        label.setFont(label.getFont().deriveFont(Font.PLAIN, 17f));
+        label.setForeground(theme.text());
+        label.setFont(label.getFont().deriveFont(Font.PLAIN, 14f));
         row.add(label, constraints);
 
         constraints.gridx = 1;
         constraints.weightx = 0;
         constraints.fill = GridBagConstraints.HORIZONTAL;
-        modelCombo.setPreferredSize(new Dimension(250, 36));
-        modelCombo.setFont(modelCombo.getFont().deriveFont(Font.PLAIN, 16f));
+        modelCombo.setPreferredSize(new Dimension(210, 31));
+        modelCombo.setFont(modelCombo.getFont().deriveFont(Font.PLAIN, 14f));
+        modelCombo.setForeground(theme.text());
+        modelCombo.setBackground(theme.field());
         row.add(modelCombo, constraints);
 
         constraints.gridx = 2;
@@ -171,8 +185,8 @@ public final class MainWindow extends JFrame {
 
         constraints.gridx = 3;
         constraints.weightx = 0;
-        manageModelsButton.setPreferredSize(new Dimension(200, 38));
-        manageModelsButton.setFont(manageModelsButton.getFont().deriveFont(Font.PLAIN, 16f));
+        manageModelsButton.setPreferredSize(new Dimension(156, 31));
+        theme.styleButton(manageModelsButton, UiTheme.ButtonRole.NORMAL);
         row.add(manageModelsButton, constraints);
         return row;
     }
@@ -181,7 +195,8 @@ public final class MainWindow extends JFrame {
         JPanel row = new JPanel(new BorderLayout(12, 0));
         row.setOpaque(false);
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        statusLabel.setForeground(MUTED);
+        statusLabel.setForeground(theme.muted());
+        statusLabel.setFont(statusLabel.getFont().deriveFont(Font.PLAIN, 13f));
         progressBar.setStringPainted(false);
         progressBar.setPreferredSize(new Dimension(420, 8));
         JPanel statusStack = new JPanel(new BorderLayout(0, 6));
@@ -190,6 +205,7 @@ public final class MainWindow extends JFrame {
         statusStack.add(progressBar, BorderLayout.CENTER);
         row.add(statusStack, BorderLayout.CENTER);
         cancelButton.setVisible(false);
+        theme.styleButton(cancelButton, UiTheme.ButtonRole.NORMAL);
         row.add(cancelButton, BorderLayout.EAST);
         return row;
     }
@@ -198,10 +214,10 @@ public final class MainWindow extends JFrame {
         JPanel row = new JPanel(new BorderLayout());
         row.setOpaque(false);
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        copyButton.setPreferredSize(new Dimension(180, 42));
-        copyButton.setFont(copyButton.getFont().deriveFont(Font.PLAIN, 16f));
-        saveButton.setPreferredSize(new Dimension(220, 42));
-        saveButton.setFont(saveButton.getFont().deriveFont(Font.PLAIN, 16f));
+        copyButton.setPreferredSize(new Dimension(120, 32));
+        saveButton.setPreferredSize(new Dimension(148, 32));
+        theme.styleButton(copyButton, UiTheme.ButtonRole.NORMAL);
+        theme.styleButton(saveButton, UiTheme.ButtonRole.PRIMARY);
         row.add(copyButton, BorderLayout.WEST);
         row.add(saveButton, BorderLayout.EAST);
         return row;
@@ -212,13 +228,14 @@ public final class MainWindow extends JFrame {
         panel.setOpaque(false);
         panel.setAlignmentX(Component.LEFT_ALIGNMENT);
         JLabel label = new JLabel(title);
-        label.setForeground(MUTED);
-        label.setFont(label.getFont().deriveFont(Font.PLAIN, 20f));
+        label.setForeground(theme.muted());
+        label.setFont(label.getFont().deriveFont(Font.PLAIN, 16f));
         panel.add(label, BorderLayout.NORTH);
         JSeparator separator = new JSeparator();
-        separator.setForeground(new Color(219, 223, 229));
+        separator.setForeground(theme.separator());
+        separator.setBackground(theme.separator());
         panel.add(separator, BorderLayout.SOUTH);
-        panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+        panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         return panel;
     }
 
@@ -234,29 +251,54 @@ public final class MainWindow extends JFrame {
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosed(java.awt.event.WindowEvent event) {
+                downloadService.removeListener(downloadListener);
+                downloadService.close();
                 transcriptionAgent.close();
             }
         });
     }
 
     private void refreshModels() {
-        DefaultComboBoxModel<ModelDescriptor> comboModel = new DefaultComboBoxModel<>();
-        modelManagerAgent.installedModels().forEach(comboModel::addElement);
+        String selectedId = selectedModelItem() == null ? null : selectedModelItem().descriptor().id();
+        DefaultComboBoxModel<ModelComboItem> comboModel = new DefaultComboBoxModel<>();
+        Set<String> added = new HashSet<>();
+        modelManagerAgent.installedModels().forEach(descriptor -> {
+            comboModel.addElement(new ModelComboItem(descriptor, null, true));
+            added.add(descriptor.id());
+        });
+        for (ModelDownloadState state : downloadService.states()) {
+            if (!added.contains(state.descriptor().id()) && state.status() != ModelDownloadStatus.SUCCEEDED) {
+                comboModel.addElement(new ModelComboItem(state.descriptor(), state, false));
+                added.add(state.descriptor().id());
+            }
+        }
         modelCombo.setModel(comboModel);
-        modelManagerAgent.defaultModel().ifPresent(modelCombo::setSelectedItem);
+        selectModel(comboModel, selectedId);
         boolean hasModels = comboModel.getSize() > 0;
         modelCombo.setEnabled(hasModels);
         if (!hasModels) {
             statusLabel.setText("No models installed.");
-        } else if (!dependencyReport.hasIssues()) {
+        } else if (!dependencyReport.hasIssues() && !transcribing && downloadService.activeDownloads().isEmpty()) {
             statusLabel.setText("Ready.");
         }
     }
 
     private void openModelManager() {
-        ModelManagerDialog dialog = new ModelManagerDialog(this, modelManagerAgent, this::refreshModels);
+        ModelManagerDialog dialog = new ModelManagerDialog(this, modelManagerAgent, downloadService, theme, this::refreshModels);
         dialog.setVisible(true);
         refreshModels();
+    }
+
+    private void startInitialTinySetup() {
+        ModelDescriptor tinyModel = ModelCatalog.find("tiny.en").orElse(null);
+        if (tinyModel == null || modelManagerAgent.isInstalled(tinyModel)) {
+            refreshModels();
+            return;
+        }
+
+        statusLabel.setText("Setting up tiny.en...");
+        downloadService.startDownload(tinyModel);
+        updateDownloadProgress();
     }
 
     private void chooseAudioFile() {
@@ -284,8 +326,8 @@ public final class MainWindow extends JFrame {
     }
 
     private void startTranscription(AudioJob job) {
-        ModelDescriptor selectedModel = (ModelDescriptor) modelCombo.getSelectedItem();
-        if (selectedModel == null) {
+        ModelComboItem selectedItem = selectedModelItem();
+        if (selectedItem == null) {
             int choice = JOptionPane.showOptionDialog(
                     this,
                     "No models installed.",
@@ -301,13 +343,22 @@ public final class MainWindow extends JFrame {
             }
             return;
         }
+        if (!selectedItem.ready()) {
+            String message = selectedItem.state() != null && selectedItem.state().isActive()
+                    ? selectedItem.descriptor().displayName() + " is still downloading."
+                    : "That model is not ready yet.";
+            statusLabel.setText(message);
+            JOptionPane.showMessageDialog(this, message, "jwhisper", JOptionPane.INFORMATION_MESSAGE);
+            updateDownloadProgress();
+            return;
+        }
 
         transcriptArea.setText("");
         if (job.note() != null && !job.note().isBlank()) {
             statusLabel.setText(job.note());
         }
         setWorking(true);
-        transcriptionAgent.transcribe(job, selectedModel, new SwingTranscriptionListener())
+        transcriptionAgent.transcribe(job, selectedItem.descriptor(), new SwingTranscriptionListener())
                 .whenComplete((text, throwable) -> SwingUtilities.invokeLater(() -> {
                     if (throwable != null) {
                         handleTranscriptionError(throwable);
@@ -342,11 +393,10 @@ public final class MainWindow extends JFrame {
     }
 
     private void setWorking(boolean working) {
-        dropZone.setEnabled(!working);
-        manageModelsButton.setEnabled(!working);
-        modelCombo.setEnabled(!working && modelCombo.getItemCount() > 0);
-        progressBar.setVisible(working);
+        transcribing = working;
+        setControlsBusy(working);
         cancelButton.setVisible(working);
+        progressBar.setVisible(working);
         if (working) {
             progressBar.setValue(0);
             statusLabel.setText("Transcribing... this may take a moment.");
@@ -354,6 +404,94 @@ public final class MainWindow extends JFrame {
         boolean hasText = !transcriptArea.getText().isBlank();
         copyButton.setEnabled(!working && hasText);
         saveButton.setEnabled(!working && hasText);
+        if (!working) {
+            updateDownloadProgress();
+        }
+    }
+
+    private void setSetupWorking(boolean working, String status) {
+        setControlsBusy(working);
+        cancelButton.setVisible(false);
+        progressBar.setVisible(working);
+        if (working) {
+            progressBar.setValue(0);
+            statusLabel.setText(status);
+        }
+        boolean hasText = !transcriptArea.getText().isBlank();
+        copyButton.setEnabled(!working && hasText);
+        saveButton.setEnabled(!working && hasText);
+    }
+
+    private void setControlsBusy(boolean busy) {
+        dropZone.setEnabled(!busy);
+        manageModelsButton.setEnabled(!busy);
+        modelCombo.setEnabled(!busy && modelCombo.getItemCount() > 0);
+    }
+
+    private void handleDownloadState(ModelDownloadState state) {
+        if (state.status() == ModelDownloadStatus.SUCCEEDED) {
+            statusLabel.setText(state.message());
+            preloadIfUseful(state.descriptor());
+        } else if (state.status() == ModelDownloadStatus.FAILED) {
+            progressBar.setVisible(false);
+            statusLabel.setText(state.descriptor().displayName() + ": " + state.errorMessage());
+        }
+        updateDownloadProgress();
+    }
+
+    private void updateDownloadProgress() {
+        if (transcribing) {
+            return;
+        }
+        List<ModelDownloadState> active = downloadService.activeDownloads();
+        if (active.isEmpty()) {
+            progressBar.setVisible(false);
+            return;
+        }
+        ModelDownloadState state = active.get(0);
+        progressBar.setVisible(true);
+        progressBar.setValue(state.percent());
+        statusLabel.setText("Model download " + state.percent() + "% - " + state.message());
+    }
+
+    private void preloadIfUseful(ModelDescriptor descriptor) {
+        if (preloadStarted.add(descriptor.id())) {
+            transcriptionAgent.preload(descriptor);
+        }
+    }
+
+    private void handleModelSelection() {
+        ModelComboItem item = selectedModelItem();
+        if (item != null && !item.ready()) {
+            if (item.state() != null && item.state().isActive()) {
+                statusLabel.setText(item.descriptor().displayName() + " is still downloading.");
+            } else if (item.state() != null && item.state().status() == ModelDownloadStatus.FAILED) {
+                statusLabel.setText(item.descriptor().displayName() + ": " + item.state().errorMessage());
+            }
+        }
+    }
+
+    private ModelComboItem selectedModelItem() {
+        Object selected = modelCombo.getSelectedItem();
+        return selected instanceof ModelComboItem item ? item : null;
+    }
+
+    private void selectModel(DefaultComboBoxModel<ModelComboItem> comboModel, String preferredId) {
+        String idToSelect = preferredId;
+        if (idToSelect == null) {
+            idToSelect = modelManagerAgent.defaultModel().map(ModelDescriptor::id).orElse(null);
+        }
+        if (idToSelect != null) {
+            for (int i = 0; i < comboModel.getSize(); i++) {
+                if (comboModel.getElementAt(i).descriptor().id().equals(idToSelect)) {
+                    modelCombo.setSelectedIndex(i);
+                    return;
+                }
+            }
+        }
+        if (comboModel.getSize() > 0) {
+            modelCombo.setSelectedIndex(0);
+        }
     }
 
     private void copyTranscript() {
@@ -407,6 +545,47 @@ public final class MainWindow extends JFrame {
                 }
                 transcriptArea.append(text);
             });
+        }
+    }
+
+    private record ModelComboItem(ModelDescriptor descriptor, ModelDownloadState state, boolean ready) {
+        @Override
+        public String toString() {
+            if (ready) {
+                return descriptor.displayName();
+            }
+            if (state != null && state.isActive()) {
+                return descriptor.displayName() + " (downloading " + state.percent() + "%)";
+            }
+            if (state != null && state.status() == ModelDownloadStatus.FAILED) {
+                return descriptor.displayName() + " (download failed)";
+            }
+            return descriptor.displayName() + " (not ready)";
+        }
+    }
+
+    private final class ModelComboRenderer extends DefaultListCellRenderer {
+        @Override
+        public Component getListCellRendererComponent(
+                JList<?> list,
+                Object value,
+                int index,
+                boolean isSelected,
+                boolean cellHasFocus
+        ) {
+            JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+            if (value instanceof ModelComboItem item) {
+                label.setText(item.toString());
+                if (!item.ready() && (!isSelected || index < 0)) {
+                    label.setForeground(theme.subtle());
+                } else if (!isSelected) {
+                    label.setForeground(theme.text());
+                }
+            }
+            if (!isSelected) {
+                label.setBackground(theme.field());
+            }
+            return label;
         }
     }
 }

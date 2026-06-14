@@ -1,7 +1,6 @@
 package com.jwhisper.ui;
 
 import javax.swing.JTextArea;
-import java.awt.Color;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;

@@ -1,6 +1,9 @@
 package com.jwhisper.ui;
 
 import com.jwhisper.model.ModelDescriptor;
+import com.jwhisper.model.ModelDownloadListener;
+import com.jwhisper.model.ModelDownloadService;
+import com.jwhisper.model.ModelDownloadState;
 import com.jwhisper.model.ModelManagerAgent;
 
 import javax.swing.BorderFactory;
@@ -19,8 +22,6 @@ import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingConstants;
-import javax.swing.SwingUtilities;
-import javax.swing.SwingWorker;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -34,7 +35,10 @@ import java.util.List;
 
 public final class ModelManagerDialog extends JDialog {
     private final ModelManagerAgent modelManagerAgent;
+    private final ModelDownloadService downloadService;
+    private final UiTheme theme;
     private final Runnable onModelsChanged;
+    private final ModelDownloadListener downloadListener;
     private final DefaultListModel<ModelDescriptor> installedListModel = new DefaultListModel<>();
     private final JList<ModelDescriptor> installedList = new JList<>(installedListModel);
     private final JComboBox<ModelDescriptor> availableCombo = new JComboBox<>();
@@ -43,40 +47,67 @@ public final class ModelManagerDialog extends JDialog {
     private final JButton downloadButton = new JButton("Download model");
     private final JButton deleteButton = new JButton("Delete");
     private final JButton defaultButton = new JButton("Set default");
-    private boolean busy;
+    private final JButton closeButton = new JButton("Close");
+    private String defaultModelId;
 
-    public ModelManagerDialog(Frame owner, ModelManagerAgent modelManagerAgent, Runnable onModelsChanged) {
+    public ModelManagerDialog(
+            Frame owner,
+            ModelManagerAgent modelManagerAgent,
+            ModelDownloadService downloadService,
+            UiTheme theme,
+            Runnable onModelsChanged
+    ) {
         super(owner, "Manage models", true);
         this.modelManagerAgent = modelManagerAgent;
+        this.downloadService = downloadService;
+        this.theme = theme;
         this.onModelsChanged = onModelsChanged;
+        this.downloadListener = state -> javax.swing.SwingUtilities.invokeLater(() -> {
+            updateDownloadProgress();
+            refreshModels();
+            this.onModelsChanged.run();
+        });
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setContentPane(buildContent());
         refreshModels();
         pack();
         setMinimumSize(new Dimension(620, 420));
         setLocationRelativeTo(owner);
+        downloadService.addListener(downloadListener);
     }
 
     private JPanel buildContent() {
         JPanel root = new JPanel(new BorderLayout(16, 16));
+        root.setBackground(theme.background());
         root.setBorder(BorderFactory.createEmptyBorder(20, 22, 18, 22));
 
         JLabel title = new JLabel("Models");
-        title.setFont(title.getFont().deriveFont(Font.PLAIN, 22f));
+        title.setForeground(theme.text());
+        title.setFont(title.getFont().deriveFont(Font.PLAIN, 19f));
         root.add(title, BorderLayout.NORTH);
 
         installedList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         installedList.setCellRenderer(new ModelRenderer());
+        installedList.setForeground(theme.text());
+        installedList.setBackground(theme.field());
+        installedList.setFixedCellHeight(30);
         installedList.addListSelectionListener(event -> updateButtons());
         JScrollPane scrollPane = new JScrollPane(installedList);
         scrollPane.setPreferredSize(new Dimension(520, 180));
+        scrollPane.setBorder(BorderFactory.createLineBorder(theme.fieldBorder()));
+        scrollPane.getViewport().setBackground(theme.field());
 
         DefaultComboBoxModel<ModelDescriptor> availableModel = new DefaultComboBoxModel<>();
         modelManagerAgent.availableModels().forEach(availableModel::addElement);
         availableCombo.setModel(availableModel);
         availableCombo.setRenderer(new ModelRenderer());
+        availableCombo.setForeground(theme.text());
+        availableCombo.setBackground(theme.field());
+        availableCombo.setFont(availableCombo.getFont().deriveFont(Font.PLAIN, 14f));
+        availableCombo.addActionListener(event -> updateButtons());
 
         JPanel center = new JPanel(new GridBagLayout());
+        center.setOpaque(false);
         GridBagConstraints constraints = new GridBagConstraints();
         constraints.gridx = 0;
         constraints.gridy = 0;
@@ -86,6 +117,7 @@ public final class ModelManagerDialog extends JDialog {
         center.add(scrollPane, constraints);
 
         JPanel downloadRow = new JPanel(new GridBagLayout());
+        downloadRow.setOpaque(false);
         GridBagConstraints comboConstraints = new GridBagConstraints();
         comboConstraints.gridx = 0;
         comboConstraints.gridy = 0;
@@ -107,16 +139,24 @@ public final class ModelManagerDialog extends JDialog {
         progressBar.setStringPainted(false);
         progressBar.setVisible(false);
         JPanel actions = new JPanel(new BorderLayout(12, 12));
+        actions.setOpaque(false);
         JPanel progressRow = new JPanel(new BorderLayout(12, 0));
+        progressRow.setOpaque(false);
         statusLabel.setHorizontalAlignment(SwingConstants.LEFT);
+        statusLabel.setForeground(theme.muted());
+        statusLabel.setFont(statusLabel.getFont().deriveFont(Font.PLAIN, 13f));
         progressRow.add(statusLabel, BorderLayout.CENTER);
         progressRow.add(progressBar, BorderLayout.SOUTH);
         actions.add(progressRow, BorderLayout.CENTER);
 
         JPanel buttonRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        buttonRow.setOpaque(false);
+        theme.styleButton(defaultButton, UiTheme.ButtonRole.NORMAL);
+        theme.styleButton(deleteButton, UiTheme.ButtonRole.DANGER);
+        theme.styleButton(closeButton, UiTheme.ButtonRole.NORMAL);
+        theme.styleButton(downloadButton, UiTheme.ButtonRole.PRIMARY);
         buttonRow.add(defaultButton);
         buttonRow.add(deleteButton);
-        JButton closeButton = new JButton("Close");
         buttonRow.add(Box.createHorizontalStrut(10));
         buttonRow.add(closeButton);
         actions.add(buttonRow, BorderLayout.SOUTH);
@@ -130,13 +170,27 @@ public final class ModelManagerDialog extends JDialog {
     }
 
     private void refreshModels() {
+        String selectedId = installedList.getSelectedValue() == null ? null : installedList.getSelectedValue().id();
+        defaultModelId = modelManagerAgent.defaultModelId().orElse(null);
         installedListModel.clear();
         List<ModelDescriptor> installed = modelManagerAgent.installedModels();
         installed.forEach(installedListModel::addElement);
         if (!installed.isEmpty()) {
-            installedList.setSelectedIndex(0);
+            installedList.setSelectedIndex(selectedInstalledIndex(installed, selectedId));
         }
+        updateDownloadProgress();
         updateButtons();
+    }
+
+    private int selectedInstalledIndex(List<ModelDescriptor> installed, String selectedId) {
+        if (selectedId != null) {
+            for (int i = 0; i < installed.size(); i++) {
+                if (installed.get(i).id().equals(selectedId)) {
+                    return i;
+                }
+            }
+        }
+        return 0;
     }
 
     private void downloadSelectedModel() {
@@ -148,45 +202,9 @@ public final class ModelManagerDialog extends JDialog {
             statusLabel.setText("Model already installed.");
             return;
         }
-        setBusy(true);
-        SwingWorker<Void, ProgressUpdate> worker = new SwingWorker<>() {
-            @Override
-            protected Void doInBackground() throws Exception {
-                modelManagerAgent.downloadModel(descriptor, (fraction, status) -> {
-                    setProgress((int) Math.round(fraction * 100));
-                    publish(new ProgressUpdate((int) Math.round(fraction * 100), status));
-                });
-                return null;
-            }
-
-            @Override
-            protected void process(List<ProgressUpdate> chunks) {
-                ProgressUpdate latest = chunks.get(chunks.size() - 1);
-                progressBar.setValue(latest.percent());
-                statusLabel.setText(latest.status());
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    get();
-                    statusLabel.setText("Model ready.");
-                    refreshModels();
-                    onModelsChanged.run();
-                } catch (Exception e) {
-                    JOptionPane.showMessageDialog(
-                            ModelManagerDialog.this,
-                            userMessage(e),
-                            "jwhisper",
-                            JOptionPane.ERROR_MESSAGE
-                    );
-                    statusLabel.setText("Download failed. Try again.");
-                } finally {
-                    setBusy(false);
-                }
-            }
-        };
-        worker.execute();
+        downloadService.startDownload(descriptor);
+        updateDownloadProgress();
+        updateButtons();
     }
 
     private void deleteSelectedModel() {
@@ -229,40 +247,36 @@ public final class ModelManagerDialog extends JDialog {
         }
     }
 
-    private void setBusy(boolean busy) {
-        this.busy = busy;
-        progressBar.setVisible(busy);
-        if (busy) {
-            progressBar.setValue(0);
-            statusLabel.setText("Downloading...");
+    private void updateDownloadProgress() {
+        List<ModelDownloadState> active = downloadService.activeDownloads();
+        if (active.isEmpty()) {
+            progressBar.setVisible(false);
+            if (statusLabel.getText().startsWith("Downloading") || statusLabel.getText().contains(": Downloading")) {
+                statusLabel.setText("Ready.");
+            }
+            return;
         }
-        updateButtons();
+        ModelDownloadState state = active.get(0);
+        progressBar.setVisible(true);
+        progressBar.setValue(state.percent());
+        statusLabel.setText(state.message());
     }
 
     private void updateButtons() {
         boolean hasSelection = installedList.getSelectedValue() != null;
-        downloadButton.setEnabled(!busy);
-        availableCombo.setEnabled(!busy);
-        deleteButton.setEnabled(!busy && hasSelection);
-        defaultButton.setEnabled(!busy && hasSelection);
+        ModelDescriptor selectedDownload = (ModelDescriptor) availableCombo.getSelectedItem();
+        boolean selectedInstalled = selectedDownload != null && modelManagerAgent.isInstalled(selectedDownload);
+        boolean selectedDownloading = selectedDownload != null && downloadService.isDownloading(selectedDownload);
+        downloadButton.setEnabled(selectedDownload != null && !selectedInstalled && !selectedDownloading);
+        availableCombo.setEnabled(true);
+        deleteButton.setEnabled(hasSelection);
+        defaultButton.setEnabled(hasSelection);
     }
 
-    private String userMessage(Exception e) {
-        Throwable cause = e;
-        while (cause.getCause() != null) {
-            cause = cause.getCause();
-        }
-        String message = cause.getMessage();
-        if (message == null || message.isBlank()) {
-            return "Download failed. Try again.";
-        }
-        if (message.contains("disk space")) {
-            return "Not enough disk space for this model.";
-        }
-        if (message.contains("invalid")) {
-            return "Model file is invalid. Delete and re-download.";
-        }
-        return "Download failed. Try again.";
+    @Override
+    public void dispose() {
+        downloadService.removeListener(downloadListener);
+        super.dispose();
     }
 
     private final class ModelRenderer extends DefaultListCellRenderer {
@@ -276,16 +290,22 @@ public final class ModelManagerDialog extends JDialog {
         ) {
             JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
             if (value instanceof ModelDescriptor descriptor) {
-                String suffix = modelManagerAgent.defaultModel()
-                        .filter(defaultModel -> defaultModel.id().equals(descriptor.id()))
-                        .map(defaultModel -> "  (default)")
+                String suffix = descriptor.id().equals(defaultModelId) ? "  (default)" : "";
+                suffix += downloadService.stateFor(descriptor)
+                        .filter(ModelDownloadState::isActive)
+                        .map(state -> "  (downloading " + state.percent() + "%)")
                         .orElse("");
                 label.setText(descriptor.displayName() + suffix + " - " + descriptor.description());
             }
+            if (!isSelected) {
+                label.setForeground(theme.text());
+                label.setBackground(theme.field());
+            } else {
+                label.setForeground(theme.accentText());
+                label.setBackground(theme.accent());
+            }
+            label.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
             return label;
         }
-    }
-
-    private record ProgressUpdate(int percent, String status) {
     }
 }

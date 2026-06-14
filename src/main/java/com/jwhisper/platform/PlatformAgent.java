@@ -17,6 +17,7 @@ public final class PlatformAgent {
         System.setProperty("apple.laf.useScreenMenuBar", "true");
         System.setProperty("com.apple.mrj.application.apple.menu.about.name", "jwhisper");
         System.setProperty("apple.awt.application.name", "jwhisper");
+        System.setProperty("apple.awt.application.appearance", "system");
     }
 
     public void useSystemLookAndFeel() {

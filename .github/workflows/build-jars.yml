@@ -1,0 +1,55 @@
+name: Build jwhisper jars
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  apple-silicon:
+    name: Apple Silicon CoreML jar
+    runs-on: macos-26
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Build Apple Silicon jar
+        run: gradle -PjwhisperRuntime=apple clean test fatJar
+
+      - name: Upload Apple Silicon jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: jwhisper-apple-silicon-coreml
+          path: build/libs/*apple-all.jar
+
+  gpu:
+    name: GPU CUDA/ROCm jar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Build GPU jar
+        run: gradle -PjwhisperRuntime=gpu clean test fatJar
+
+      - name: Upload GPU jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: jwhisper-gpu-cuda-rocm
+          path: build/libs/*gpu-all.jar

@@ -6,13 +6,23 @@ plugins {
 group = 'com.jwhisper'
 version = '0.1.0'
 
+def runtimeVariant = providers.gradleProperty('jwhisperRuntime')
+        .orElse(System.getenv('JWHISPER_RUNTIME') ?: 'cpu')
+        .get()
+        .toLowerCase(Locale.ROOT)
+if (!['cpu', 'apple', 'gpu'].contains(runtimeVariant)) {
+    throw new GradleException("Unsupported jwhisperRuntime '${runtimeVariant}'. Use cpu, apple, or gpu.")
+}
+def onnxRuntimeArtifact = runtimeVariant == 'gpu' ? 'onnxruntime_gpu' : 'onnxruntime'
+def projectVersion = version.toString()
+
 java {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
 }
 
 dependencies {
-    implementation 'com.microsoft.onnxruntime:onnxruntime:1.26.0'
+    implementation "com.microsoft.onnxruntime:${onnxRuntimeArtifact}:1.26.0"
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.0'
 
     testImplementation 'org.junit.jupiter:junit-jupiter:6.1.0'
@@ -23,7 +33,8 @@ application {
     mainClass = 'com.jwhisper.JWhisperApp'
     applicationDefaultJvmArgs = [
             '-Dapple.laf.useScreenMenuBar=true',
-            '-Dcom.apple.mrj.application.apple.menu.about.name=jwhisper'
+            '-Dcom.apple.mrj.application.apple.menu.about.name=jwhisper',
+            "-Djwhisper.runtimeVariant=${runtimeVariant}"
     ]
 }
 
@@ -34,4 +45,53 @@ tasks.withType(JavaCompile).configureEach {
 
 tasks.named('test') {
     useJUnitPlatform()
+}
+
+tasks.named('processResources') {
+    inputs.property('runtimeVariant', runtimeVariant)
+    inputs.property('onnxRuntimeArtifact', onnxRuntimeArtifact)
+    filesMatching('com/jwhisper/build.properties') {
+        expand(
+                version: projectVersion,
+                runtimeVariant: runtimeVariant,
+                onnxRuntimeArtifact: onnxRuntimeArtifact
+        )
+    }
+}
+
+tasks.named('jar') {
+    archiveClassifier = runtimeVariant
+    manifest {
+        attributes(
+                'Main-Class': application.mainClass.get(),
+                'Implementation-Title': 'jwhisper',
+                'Implementation-Version': projectVersion,
+                'Jwhisper-Runtime-Variant': runtimeVariant,
+                'Jwhisper-OnnxRuntime-Artifact': onnxRuntimeArtifact
+        )
+    }
+}
+
+tasks.register('fatJar', Jar) {
+    group = 'build'
+    description = 'Builds a runnable jar with runtime dependencies.'
+    archiveBaseName = 'jwhisper'
+    archiveClassifier = "${runtimeVariant}-all"
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes(
+                'Main-Class': application.mainClass.get(),
+                'Implementation-Title': 'jwhisper',
+                'Implementation-Version': projectVersion,
+                'Jwhisper-Runtime-Variant': runtimeVariant,
+                'Jwhisper-OnnxRuntime-Artifact': onnxRuntimeArtifact
+        )
+    }
+    exclude('META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA')
+    from(sourceSets.main.output)
+    from({
+        configurations.runtimeClasspath.collect { file ->
+            file.isDirectory() ? file : zipTree(file)
+        }
+    })
 }

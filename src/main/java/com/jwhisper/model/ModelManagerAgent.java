@@ -205,7 +205,7 @@ public final class ModelManagerAgent {
         store.installed.add(new InstalledModel(descriptor.id(), Instant.now().toString(), descriptor.repository()));
     }
 
-    private ModelStore loadStore() {
+    private synchronized ModelStore loadStore() {
         Path path = storePath();
         if (!Files.isRegularFile(path)) {
             return new ModelStore();
@@ -221,7 +221,7 @@ public final class ModelManagerAgent {
         }
     }
 
-    private void saveStore(ModelStore store) throws IOException {
+    private synchronized void saveStore(ModelStore store) throws IOException {
         Files.createDirectories(modelsDirectory);
         mapper.writeValue(storePath().toFile(), store);
     }

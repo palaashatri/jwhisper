@@ -8,6 +8,10 @@ import javax.swing.border.Border;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Insets;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 
 public record UiTheme(
         boolean dark,
@@ -31,6 +35,11 @@ public record UiTheme(
         String override = System.getProperty("jwhisper.theme", System.getenv("JWHISPER_THEME"));
         if (override != null && !override.isBlank()) {
             return "dark".equalsIgnoreCase(override) ? darkTheme() : lightTheme();
+        }
+
+        Boolean macDarkMode = macOsDarkMode();
+        if (macDarkMode != null) {
+            return macDarkMode ? darkTheme() : lightTheme();
         }
 
         Color panel = UIManager.getColor("Panel.background");
@@ -83,8 +92,8 @@ public record UiTheme(
     }
 
     public void styleButton(JButton button, ButtonRole role) {
-        button.setFont(button.getFont().deriveFont(Font.PLAIN, 14f));
-        button.setMargin(new Insets(5, 13, 5, 13));
+        button.setFont(button.getFont().deriveFont(Font.PLAIN, 13f));
+        button.setMargin(new Insets(3, 10, 3, 10));
         button.setFocusPainted(false);
         button.setOpaque(true);
         button.putClientProperty("JButton.buttonType", "roundRect");
@@ -94,7 +103,7 @@ public record UiTheme(
             button.setBackground(accent);
             button.setBorder(BorderFactory.createCompoundBorder(
                     BorderFactory.createLineBorder(accent.darker()),
-                    BorderFactory.createEmptyBorder(4, 12, 4, 12)
+                    BorderFactory.createEmptyBorder(3, 10, 3, 10)
             ));
         } else if (role == ButtonRole.DANGER) {
             button.setForeground(dark ? new Color(255, 196, 196) : new Color(150, 36, 36));
@@ -105,6 +114,41 @@ public record UiTheme(
             button.setBackground(field);
             button.setBorder(buttonBorder());
         }
+    }
+
+    public void applyGlobalDefaults() {
+        UIManager.put("Panel.background", background);
+        UIManager.put("OptionPane.background", background);
+        UIManager.put("OptionPane.messageForeground", text);
+        UIManager.put("Label.foreground", text);
+        UIManager.put("Separator.foreground", separator);
+        UIManager.put("Separator.background", separator);
+
+        UIManager.put("TextArea.background", field);
+        UIManager.put("TextArea.foreground", text);
+        UIManager.put("TextArea.caretForeground", text);
+        UIManager.put("TextField.background", field);
+        UIManager.put("TextField.foreground", text);
+        UIManager.put("TextField.caretForeground", text);
+
+        UIManager.put("ComboBox.background", field);
+        UIManager.put("ComboBox.foreground", text);
+        UIManager.put("ComboBox.selectionBackground", accent);
+        UIManager.put("ComboBox.selectionForeground", accentText);
+        UIManager.put("List.background", field);
+        UIManager.put("List.foreground", text);
+        UIManager.put("List.selectionBackground", accent);
+        UIManager.put("List.selectionForeground", accentText);
+
+        UIManager.put("Button.background", field);
+        UIManager.put("Button.foreground", text);
+        UIManager.put("Button.select", elevatedSurface);
+        UIManager.put("ProgressBar.background", separator);
+        UIManager.put("ProgressBar.foreground", accent);
+        UIManager.put("ProgressBar.selectionBackground", text);
+        UIManager.put("ProgressBar.selectionForeground", accentText);
+        UIManager.put("ScrollPane.background", background);
+        UIManager.put("Viewport.background", field);
     }
 
     public void styleField(JComponent component) {
@@ -119,8 +163,36 @@ public record UiTheme(
     private Border buttonBorder() {
         return BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(fieldBorder),
-                BorderFactory.createEmptyBorder(4, 12, 4, 12)
+                BorderFactory.createEmptyBorder(3, 10, 3, 10)
         );
+    }
+
+    private static Boolean macOsDarkMode() {
+        String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (!osName.contains("mac")) {
+            return null;
+        }
+
+        try {
+            Process process = new ProcessBuilder("defaults", "read", "-g", "AppleInterfaceStyle")
+                    .redirectErrorStream(true)
+                    .start();
+            if (!process.waitFor(350, TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly();
+                return null;
+            }
+
+            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            if (process.exitValue() != 0) {
+                return false;
+            }
+            return "dark".equalsIgnoreCase(output);
+        } catch (IOException e) {
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
     }
 
     private static int brightness(Color color) {

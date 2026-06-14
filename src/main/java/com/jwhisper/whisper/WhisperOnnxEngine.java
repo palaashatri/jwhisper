@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class WhisperOnnxEngine implements WhisperEngineAgent {
     private final OrtEnvironment environment;
     private final FfmpegAudioDecoder audioDecoder;
+    private final WhisperProviderConfig providerConfig;
     private final AtomicBoolean canceled = new AtomicBoolean(false);
 
     private ModelDescriptor loadedModel;
@@ -35,10 +36,16 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
     private WhisperFeatureExtractor featureExtractor;
     private WhisperGenerationConfig generationConfig;
     private WhisperTokenizer tokenizer;
+    private WhisperExecutionProvider activeProvider = WhisperExecutionProvider.CPU;
 
     public WhisperOnnxEngine() {
+        this(WhisperProviderConfig.fromEnvironment());
+    }
+
+    WhisperOnnxEngine(WhisperProviderConfig providerConfig) {
         this.environment = OrtEnvironment.getEnvironment();
         this.audioDecoder = new FfmpegAudioDecoder();
+        this.providerConfig = providerConfig;
     }
 
     @Override
@@ -63,8 +70,10 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
                     modelRoot.resolve("tokenizer_config.json")
             );
 
-            encoderSession = environment.createSession(encoder.toString());
-            decoderSession = environment.createSession(decoder.toString());
+            SessionBundle sessions = createSessions(encoder, decoder);
+            encoderSession = sessions.encoderSession();
+            decoderSession = sessions.decoderSession();
+            activeProvider = sessions.provider();
             encoderInputName = chooseName(encoderSession.getInputNames(), "input_features", null);
             decoderInputIdsName = chooseName(decoderSession.getInputNames(), "input_ids", "input");
             decoderEncoderStatesName = chooseName(decoderSession.getInputNames(), "encoder_hidden_states", "encoder");
@@ -91,7 +100,7 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
                 throw new WhisperException("Something went wrong. Try another file.");
             }
 
-            listener.onStatus("Transcribing... this may take a moment.");
+            listener.onStatus("Transcribing with " + activeProvider.displayName() + "... this may take a moment.");
             int chunkSize = featureExtractor.maxSamples();
             int chunks = Math.max(1, (int) Math.ceil(samples.length / (double) chunkSize));
             StringBuilder transcript = new StringBuilder();
@@ -197,6 +206,44 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
         return inputs;
     }
 
+    private SessionBundle createSessions(Path encoder, Path decoder) throws OrtException, WhisperException {
+        WhisperExecutionProvider requested = providerConfig.resolve(OrtEnvironment.getAvailableProviders());
+        try {
+            return openSessionBundle(encoder, decoder, requested);
+        } catch (OrtException e) {
+            if (requested != WhisperExecutionProvider.CPU && providerConfig.allowCpuFallback()) {
+                return openSessionBundle(encoder, decoder, WhisperExecutionProvider.CPU);
+            }
+            throw new WhisperException(requested.displayName() + " provider failed. Check the runtime build and drivers.", e);
+        }
+    }
+
+    private SessionBundle openSessionBundle(
+            Path encoder,
+            Path decoder,
+            WhisperExecutionProvider provider
+    ) throws OrtException {
+        OrtSession openedEncoder = null;
+        try {
+            openedEncoder = createSession(encoder, provider);
+            OrtSession openedDecoder = createSession(decoder, provider);
+            return new SessionBundle(openedEncoder, openedDecoder, provider);
+        } catch (OrtException e) {
+            if (openedEncoder != null) {
+                openedEncoder.close();
+            }
+            throw e;
+        }
+    }
+
+    private OrtSession createSession(Path model, WhisperExecutionProvider provider) throws OrtException {
+        try (OrtSession.SessionOptions options = new OrtSession.SessionOptions()) {
+            options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+            provider.applyTo(options, providerConfig.deviceId());
+            return environment.createSession(model.toString(), options);
+        }
+    }
+
     private int chooseNextToken(float[] logits, boolean firstGeneratedToken) {
         for (Integer tokenId : generationConfig.suppressTokens()) {
             if (tokenId >= 0 && tokenId < logits.length) {
@@ -261,5 +308,13 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
         }
         loadedModel = null;
         loadedRoot = null;
+        activeProvider = WhisperExecutionProvider.CPU;
+    }
+
+    private record SessionBundle(
+            OrtSession encoderSession,
+            OrtSession decoderSession,
+            WhisperExecutionProvider provider
+    ) {
     }
 }

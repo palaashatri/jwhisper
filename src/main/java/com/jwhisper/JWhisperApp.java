@@ -3,10 +3,12 @@ package com.jwhisper;
 import com.jwhisper.audio.AudioInputAgent;
 import com.jwhisper.deps.DependencyAgent;
 import com.jwhisper.deps.DependencyReport;
+import com.jwhisper.model.ModelDownloadService;
 import com.jwhisper.model.ModelManagerAgent;
 import com.jwhisper.platform.PlatformAgent;
 import com.jwhisper.transcribe.TranscriptionAgent;
 import com.jwhisper.ui.MainWindow;
+import com.jwhisper.ui.UiTheme;
 import com.jwhisper.whisper.UnavailableWhisperEngine;
 import com.jwhisper.whisper.WhisperEngineAgent;
 import com.jwhisper.whisper.WhisperOnnxEngine;
@@ -22,11 +24,14 @@ public final class JWhisperApp {
         SwingUtilities.invokeLater(() -> {
             PlatformAgent platformAgent = new PlatformAgent();
             platformAgent.useSystemLookAndFeel();
+            UiTheme theme = UiTheme.current();
+            theme.applyGlobalDefaults();
             platformAgent.installMacMenuHandlers();
 
             DependencyAgent dependencyAgent = new DependencyAgent(platformAgent);
             DependencyReport dependencyReport = dependencyAgent.checkStartupDependencies();
             ModelManagerAgent modelManagerAgent = new ModelManagerAgent(platformAgent.modelDirectory(), dependencyAgent);
+            ModelDownloadService downloadService = new ModelDownloadService(modelManagerAgent);
             WhisperEngineAgent whisperEngineAgent = createWhisperEngine();
             TranscriptionAgent transcriptionAgent = new TranscriptionAgent(
                     modelManagerAgent,
@@ -36,6 +41,7 @@ public final class JWhisperApp {
 
             MainWindow window = new MainWindow(
                     modelManagerAgent,
+                    downloadService,
                     new AudioInputAgent(),
                     transcriptionAgent,
                     dependencyReport

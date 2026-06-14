@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.jwhisper.whisper.WhisperFeatureExtractorTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-06-14T06:55:21.465Z" hostname="Palaashs-MacBook-Pro.local" time="0.002">
-  <properties/>
-  <testcase name="producesFiniteThreeDimensionalFeatureTensor()" classname="com.jwhisper.whisper.WhisperFeatureExtractorTest" time="0.001"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>
