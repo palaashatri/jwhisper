@@ -2,6 +2,9 @@
 
 jwhisper is a small Java 17 Swing desktop app for local Whisper ONNX audio-to-text.
 
+<img width="1056" height="772" alt="Screenshot 2026-06-14 at 1 16 35 PM" src="https://github.com/user-attachments/assets/5ac0c99d-9440-4214-933b-324dca408659" />
+
+
 It is designed to be simple on purpose: one window, drag-and-drop audio, local model storage, and offline transcription through ONNX Runtime.
 
 ## Features
