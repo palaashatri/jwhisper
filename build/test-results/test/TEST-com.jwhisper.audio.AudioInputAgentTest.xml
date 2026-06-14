@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.jwhisper.audio.AudioInputAgentTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-06-14T06:55:21.403Z" hostname="Palaashs-MacBook-Pro.local" time="0.057">
+  <properties/>
+  <testcase name="rejectsUnsupportedFilesWithSimpleMessage()" classname="com.jwhisper.audio.AudioInputAgentTest" time="0.028"/>
+  <testcase name="acceptsSupportedAudioExtensionsCaseInsensitively()" classname="com.jwhisper.audio.AudioInputAgentTest" time="0.011"/>
+  <testcase name="droppedFilesUseTheFirstFileAndAddANote()" classname="com.jwhisper.audio.AudioInputAgentTest" time="0.006"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

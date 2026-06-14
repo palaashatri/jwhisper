@@ -1,0 +1,37 @@
+plugins {
+    id 'application'
+    id 'java'
+}
+
+group = 'com.jwhisper'
+version = '0.1.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+dependencies {
+    implementation 'com.microsoft.onnxruntime:onnxruntime:1.26.0'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.0'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:6.1.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:6.1.0'
+}
+
+application {
+    mainClass = 'com.jwhisper.JWhisperApp'
+    applicationDefaultJvmArgs = [
+            '-Dapple.laf.useScreenMenuBar=true',
+            '-Dcom.apple.mrj.application.apple.menu.about.name=jwhisper'
+    ]
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 17
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
