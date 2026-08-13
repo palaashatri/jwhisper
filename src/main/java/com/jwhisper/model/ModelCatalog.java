@@ -1,5 +1,6 @@
 package com.jwhisper.model;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -17,9 +18,14 @@ public final class ModelCatalog {
                     "onnx-community/whisper-tiny.en",
                     TINY_EN_REVISION,
                     "Fast English model",
-                    156_000_000L,
+                    285_000_000L,
                     "8c361b9430a5ef6619ee64b7fe06c725df19f36d508cc8b847064b34a888a3fe",
-                    "14f1d425a4821feeba77cf93eeeaf812ca816f2e3fec382b4f0fa93d29de710e"
+                    "14f1d425a4821feeba77cf93eeeaf812ca816f2e3fec382b4f0fa93d29de710e",
+                    new ModelFile(
+                            "onnx/decoder_with_past_model.onnx",
+                            113_627_861L,
+                            "0ed76a8f8b9448c9eb74ad07549b65285d29dd36f4e42911fc65d67becbe9458"
+                    )
             ),
             descriptor(
                     "base.en",
@@ -29,6 +35,7 @@ public final class ModelCatalog {
                     "Balanced English model",
                     294_000_000L,
                     "1cc86302d480b061452d348638064383ab41b6f3333ddd0e423532d14edaf535",
+                    null,
                     null
             ),
             descriptor(
@@ -38,6 +45,7 @@ public final class ModelCatalog {
                     SMALL_EN_REVISION,
                     "More accurate English model",
                     970_000_000L,
+                    null,
                     null,
                     null
             ),
@@ -49,6 +57,7 @@ public final class ModelCatalog {
                     "Large multilingual model",
                     3_200_000_000L,
                     null,
+                    null,
                     null
             ),
             descriptor(
@@ -58,6 +67,7 @@ public final class ModelCatalog {
                     LARGE_V3_REVISION,
                     "Most accurate multilingual model",
                     6_500_000_000L,
+                    null,
                     null,
                     null
             )
@@ -82,7 +92,8 @@ public final class ModelCatalog {
             String description,
             long estimatedBytes,
             String encoderSha256,
-            String decoderSha256
+            String decoderSha256,
+            ModelFile decoderWithPast
     ) {
         return new ModelDescriptor(
                 id,
@@ -91,19 +102,26 @@ public final class ModelCatalog {
                 revision,
                 description,
                 estimatedBytes,
-                standardFiles(encoderSha256, decoderSha256)
+                standardFiles(encoderSha256, decoderSha256, decoderWithPast)
         );
     }
 
-    private static List<ModelFile> standardFiles(String encoderSha256, String decoderSha256) {
-        return List.of(
-                new ModelFile("config.json", 0, null),
-                new ModelFile("generation_config.json", 0, null),
-                new ModelFile("preprocessor_config.json", 0, null),
-                new ModelFile("tokenizer_config.json", 0, null),
-                new ModelFile("tokenizer.json", 0, null),
-                new ModelFile("onnx/encoder_model.onnx", 0, encoderSha256),
-                new ModelFile("onnx/decoder_model.onnx", 0, decoderSha256)
-        );
+    private static List<ModelFile> standardFiles(
+            String encoderSha256,
+            String decoderSha256,
+            ModelFile decoderWithPast
+    ) {
+        List<ModelFile> files = new ArrayList<>();
+        files.add(new ModelFile("config.json", 0, null));
+        files.add(new ModelFile("generation_config.json", 0, null));
+        files.add(new ModelFile("preprocessor_config.json", 0, null));
+        files.add(new ModelFile("tokenizer_config.json", 0, null));
+        files.add(new ModelFile("tokenizer.json", 0, null));
+        files.add(new ModelFile("onnx/encoder_model.onnx", 0, encoderSha256));
+        files.add(new ModelFile("onnx/decoder_model.onnx", 0, decoderSha256));
+        if (decoderWithPast != null) {
+            files.add(decoderWithPast);
+        }
+        return List.copyOf(files);
     }
 }
