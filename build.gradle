@@ -96,3 +96,19 @@ tasks.register('fatJar', Jar) {
         }
     })
 }
+
+tasks.register('cli', JavaExec) {
+    group = 'application'
+    description = 'Runs the headless JWhisper CLI. Pass arguments with --args.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.jwhisper.cli.JWhisperCli'
+}
+
+tasks.register('printRuntimeClasspath') {
+    group = 'help'
+    description = 'Prints the main runtime classpath for demo and integration scripts.'
+    dependsOn tasks.named('classes')
+    doLast {
+        println sourceSets.main.runtimeClasspath.asPath
+    }
+}
