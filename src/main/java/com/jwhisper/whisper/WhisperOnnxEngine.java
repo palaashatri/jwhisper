@@ -19,12 +19,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class WhisperOnnxEngine implements WhisperEngineAgent {
     private final OrtEnvironment environment;
     private final FfmpegAudioDecoder audioDecoder;
     private final WhisperProviderConfig providerConfig;
     private final AtomicBoolean canceled = new AtomicBoolean(false);
+    private final AtomicReference<OrtSession.RunOptions> activeRunOptions = new AtomicReference<>();
 
     private ModelDescriptor loadedModel;
     private Path loadedRoot;
@@ -79,10 +81,7 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
             decoderEncoderStatesName = chooseName(decoderSession.getInputNames(), "encoder_hidden_states", "encoder");
             loadedModel = descriptor;
             loadedRoot = modelRoot;
-        } catch (OrtException e) {
-            closeSessions();
-            throw new WhisperException("Model file is invalid. Delete and re-download.", e);
-        } catch (IOException e) {
+        } catch (OrtException | IOException e) {
             closeSessions();
             throw new WhisperException("Model file is invalid. Delete and re-download.", e);
         }
@@ -92,10 +91,12 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
     public String transcribe(TranscriptionJob job, TranscriptionListener listener) throws WhisperException {
         canceled.set(false);
         loadModel(job.model(), job.modelRoot());
-        try {
+        try (OrtSession.RunOptions runOptions = new OrtSession.RunOptions()) {
+            activeRunOptions.set(runOptions);
             listener.onStatus("Preparing audio...");
             listener.onProgress(0.02);
             float[] samples = audioDecoder.decodeToMono16k(job.audioJob().file());
+            checkCanceled();
             if (samples.length == 0) {
                 throw new WhisperException("Something went wrong. Try another file.");
             }
@@ -111,7 +112,7 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
                 float[] audioChunk = Arrays.copyOfRange(samples, from, to);
                 double chunkStart = 0.10 + (0.85 * chunk / chunks);
                 double chunkEnd = 0.10 + (0.85 * (chunk + 1) / chunks);
-                String text = transcribeChunk(audioChunk, listener, chunkStart, chunkEnd);
+                String text = transcribeChunk(audioChunk, listener, chunkStart, chunkEnd, runOptions);
                 if (!text.isBlank()) {
                     if (!transcript.isEmpty()) {
                         transcript.append(System.lineSeparator());
@@ -125,19 +126,38 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
             return transcript.toString().trim();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            if (canceled.get()) {
+                throw new WhisperException("Canceled.", e);
+            }
             throw new WhisperException("Something went wrong. Try another file.", e);
-        } catch (IOException | OrtException e) {
+        } catch (OrtException e) {
+            if (canceled.get()) {
+                throw new WhisperException("Canceled.", e);
+            }
             throw new WhisperException("Something went wrong. Try another file.", e);
+        } catch (IOException e) {
+            throw new WhisperException("Something went wrong. Try another file.", e);
+        } finally {
+            activeRunOptions.set(null);
         }
     }
 
     @Override
     public void cancel() {
         canceled.set(true);
+        OrtSession.RunOptions runOptions = activeRunOptions.get();
+        if (runOptions != null) {
+            try {
+                runOptions.setTerminate(true);
+            } catch (OrtException ignored) {
+                // The cooperative cancellation flag still stops work at the next safe boundary.
+            }
+        }
     }
 
     @Override
     public synchronized void close() {
+        cancel();
         closeSessions();
     }
 
@@ -145,10 +165,12 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
             float[] samples,
             TranscriptionListener listener,
             double progressStart,
-            double progressEnd
+            double progressEnd,
+            OrtSession.RunOptions runOptions
     ) throws OrtException, WhisperException {
         float[][][] features = featureExtractor.extract(samples);
-        float[][][] encoderHiddenStates = runEncoder(features);
+        checkCanceled();
+        float[][][] encoderHiddenStates = runEncoder(features, runOptions);
         List<Long> tokens = new ArrayList<>(generationConfig.initialTokens());
         int initialSize = tokens.size();
         int maxLength = generationConfig.maxLength();
@@ -156,7 +178,7 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
         try (OnnxTensor encoderHiddenTensor = OnnxTensor.createTensor(environment, encoderHiddenStates)) {
             while (tokens.size() < maxLength) {
                 checkCanceled();
-                float[] logits = runDecoder(tokens, encoderHiddenTensor);
+                float[] logits = runDecoder(tokens, encoderHiddenTensor, runOptions);
                 int generated = tokens.size() - initialSize;
                 int nextToken = chooseNextToken(logits, generated == 0);
                 if (nextToken == generationConfig.eosTokenId()) {
@@ -173,9 +195,10 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
         return tokenizer.decode(tokens.subList(initialSize, tokens.size()));
     }
 
-    private float[][][] runEncoder(float[][][] features) throws OrtException, WhisperException {
+    private float[][][] runEncoder(float[][][] features, OrtSession.RunOptions runOptions)
+            throws OrtException, WhisperException {
         try (OnnxTensor input = OnnxTensor.createTensor(environment, features);
-             OrtSession.Result result = encoderSession.run(Map.of(encoderInputName, input))) {
+             OrtSession.Result result = encoderSession.run(Map.of(encoderInputName, input), runOptions)) {
             Object value = result.get(0).getValue();
             if (value instanceof float[][][] hiddenStates) {
                 return hiddenStates;
@@ -184,13 +207,17 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
         }
     }
 
-    private float[] runDecoder(List<Long> tokens, OnnxTensor encoderHiddenTensor) throws OrtException, WhisperException {
+    private float[] runDecoder(
+            List<Long> tokens,
+            OnnxTensor encoderHiddenTensor,
+            OrtSession.RunOptions runOptions
+    ) throws OrtException, WhisperException {
         long[][] inputIds = new long[1][tokens.size()];
         for (int i = 0; i < tokens.size(); i++) {
             inputIds[0][i] = tokens.get(i);
         }
         try (OnnxTensor inputIdsTensor = OnnxTensor.createTensor(environment, inputIds);
-             OrtSession.Result result = decoderSession.run(decoderInputs(inputIdsTensor, encoderHiddenTensor))) {
+             OrtSession.Result result = decoderSession.run(decoderInputs(inputIdsTensor, encoderHiddenTensor), runOptions)) {
             Object value = result.get(0).getValue();
             if (value instanceof float[][][] logits && logits.length > 0 && logits[0].length > 0) {
                 return logits[0][logits[0].length - 1];
@@ -286,7 +313,8 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
                 }
             }
         }
-        return names.stream().findFirst().orElseThrow(() -> new WhisperException("Model file is invalid. Delete and re-download."));
+        return names.stream().findFirst()
+                .orElseThrow(() -> new WhisperException("Model file is invalid. Delete and re-download."));
     }
 
     private synchronized void closeSessions() {
