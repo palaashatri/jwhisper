@@ -6,6 +6,7 @@ public record ModelDescriptor(
         String id,
         String displayName,
         String repository,
+        String revision,
         String description,
         long estimatedBytes,
         List<ModelFile> files
