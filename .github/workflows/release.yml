@@ -1,0 +1,64 @@
+name: Release desktop packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package / ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            runtime: cpu
+            label: linux-x64-cpu
+          - os: windows-latest
+            runtime: cpu
+            label: windows-x64-cpu
+          - os: macos-26
+            runtime: cpu
+            label: macos-cpu
+          - os: macos-26
+            runtime: apple
+            label: macos-apple-coreml
+          - os: ubuntu-latest
+            runtime: gpu
+            label: linux-x64-cuda
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Test and build app image
+        run: gradle -PjwhisperRuntime=${{ matrix.runtime }} clean test packageAppImage
+
+      - name: Archive package
+        run: python scripts/archive-package.py build/package build/distributions/jwhisper-0.1.0-${{ matrix.label }}.zip
+
+      - name: Generate checksums
+        run: python scripts/checksums.py build/distributions
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: jwhisper-0.1.0-${{ matrix.label }}
+          path: |
+            build/distributions/*.zip
+            build/distributions/SHA256SUMS

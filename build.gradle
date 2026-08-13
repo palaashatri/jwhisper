@@ -112,3 +112,31 @@ tasks.register('printRuntimeClasspath') {
         println sourceSets.main.runtimeClasspath.asPath
     }
 }
+
+tasks.register('packageAppImage', Exec) {
+    group = 'distribution'
+    description = 'Builds a self-contained desktop app image with jpackage.'
+    dependsOn tasks.named('fatJar')
+    doFirst {
+        def windows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('win')
+        def jpackage = new File(System.getProperty('java.home'), 'bin/' + (windows ? 'jpackage.exe' : 'jpackage'))
+        if (!jpackage.isFile()) {
+            throw new GradleException("jpackage was not found in the selected JDK: ${jpackage}")
+        }
+        def destination = layout.buildDirectory.dir('package').get().asFile
+        delete destination
+        destination.mkdirs()
+        commandLine(
+                jpackage.absolutePath,
+                '--type', 'app-image',
+                '--name', 'JWhisper',
+                '--dest', destination.absolutePath,
+                '--input', layout.buildDirectory.dir('libs').get().asFile.absolutePath,
+                '--main-jar', tasks.named('fatJar').get().archiveFileName.get(),
+                '--main-class', application.mainClass.get(),
+                '--app-version', projectVersion,
+                '--description', 'Local-first Whisper transcription for the JVM',
+                '--java-options', "-Djwhisper.runtimeVariant=${runtimeVariant}"
+        )
+    }
+}
