@@ -7,7 +7,50 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  cpu:
+    name: CPU / ${{ matrix.os }} / JDK ${{ matrix.java }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-26
+        java:
+          - '17'
+          - '25'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and test CPU runtime
+        run: gradle -PjwhisperRuntime=cpu clean test fatJar
+
+      - name: Verify CLI launches
+        run: gradle -PjwhisperRuntime=cpu cli --args="--help"
+
+      - name: Upload CPU jar
+        if: matrix.java == '17'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jwhisper-cpu-${{ matrix.os }}
+          path: build/libs/*cpu-all.jar
+
   apple-silicon:
     name: Apple Silicon CoreML jar
     runs-on: macos-26
@@ -22,6 +65,9 @@ jobs:
           java-version: '17'
           cache: gradle
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Build Apple Silicon jar
         run: gradle -PjwhisperRuntime=apple clean test fatJar
 
@@ -32,7 +78,7 @@ jobs:
           path: build/libs/*apple-all.jar
 
   gpu:
-    name: GPU CUDA/ROCm jar
+    name: GPU CUDA jar
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -45,11 +91,14 @@ jobs:
           java-version: '17'
           cache: gradle
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Build GPU jar
         run: gradle -PjwhisperRuntime=gpu clean test fatJar
 
       - name: Upload GPU jar
         uses: actions/upload-artifact@v4
         with:
-          name: jwhisper-gpu-cuda-rocm
+          name: jwhisper-gpu-cuda
           path: build/libs/*gpu-all.jar
