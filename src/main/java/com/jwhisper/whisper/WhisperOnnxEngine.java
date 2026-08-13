@@ -366,7 +366,7 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
         throw new WhisperException("Cached decoder output has an unsupported type: " + outputName);
     }
 
-    private float[] extractLogits(OrtSession.Result result) throws WhisperException {
+    private float[] extractLogits(OrtSession.Result result) throws WhisperException, OrtException {
         OnnxValue value = result.get("logits").orElseGet(() -> result.get(0));
         Object raw = value.getValue();
         if (raw instanceof float[][][] logits && logits.length > 0 && logits[0].length > 0) {
