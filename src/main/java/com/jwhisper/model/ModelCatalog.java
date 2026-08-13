@@ -23,7 +23,7 @@ public final class ModelCatalog {
                     "14f1d425a4821feeba77cf93eeeaf812ca816f2e3fec382b4f0fa93d29de710e",
                     new ModelFile(
                             "onnx/decoder_with_past_model.onnx",
-                            113_627_861L,
+                            113_637_462L,
                             "0ed76a8f8b9448c9eb74ad07549b65285d29dd36f4e42911fc65d67becbe9458"
                     )
             ),
