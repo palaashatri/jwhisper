@@ -13,17 +13,22 @@ import java.io.OutputStream;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 
 public final class ModelManagerAgent {
-    private static final long DOWNLOAD_BUFFER_BYTES = 1024L * 1024L;
+    private static final int DOWNLOAD_BUFFER_BYTES = 1024 * 1024;
     private static final long DOWNLOAD_SAFETY_BYTES = 512L * 1024L * 1024L;
 
     private final Path modelsDirectory;
@@ -48,9 +53,7 @@ public final class ModelManagerAgent {
         ModelStore store = loadStore();
         List<ModelDescriptor> installed = new ArrayList<>();
         for (ModelDescriptor descriptor : ModelCatalog.availableModels()) {
-            if (store.installed.stream().anyMatch(model -> descriptor.id().equals(model.id)) && isInstalled(descriptor)) {
-                installed.add(descriptor);
-            } else if (isInstalled(descriptor)) {
+            if (isInstalledAtCurrentRevision(store, descriptor)) {
                 installed.add(descriptor);
             }
         }
@@ -60,7 +63,8 @@ public final class ModelManagerAgent {
     public Optional<ModelDescriptor> defaultModel() {
         ModelStore store = loadStore();
         if (store.defaultModelId != null) {
-            Optional<ModelDescriptor> selected = ModelCatalog.find(store.defaultModelId).filter(this::isInstalled);
+            Optional<ModelDescriptor> selected = ModelCatalog.find(store.defaultModelId)
+                    .filter(descriptor -> isInstalledAtCurrentRevision(store, descriptor));
             if (selected.isPresent()) {
                 return selected;
             }
@@ -75,7 +79,7 @@ public final class ModelManagerAgent {
 
     public synchronized void setDefaultModel(ModelDescriptor descriptor) throws IOException {
         ModelStore store = loadStore();
-        if (!isInstalled(descriptor)) {
+        if (!isInstalledAtCurrentRevision(store, descriptor)) {
             throw new IOException("Model is not installed.");
         }
         registerInstalled(store, descriptor);
@@ -84,8 +88,7 @@ public final class ModelManagerAgent {
     }
 
     public synchronized boolean isInstalled(ModelDescriptor descriptor) {
-        Path root = modelRoot(descriptor);
-        return descriptor.files().stream().allMatch(file -> Files.isRegularFile(root.resolve(file.relativePath())));
+        return isInstalledAtCurrentRevision(loadStore(), descriptor);
     }
 
     public Path modelRoot(ModelDescriptor descriptor) {
@@ -120,7 +123,10 @@ public final class ModelManagerAgent {
 
         Path root = modelRoot(descriptor);
         Files.createDirectories(root);
-        long total = Math.max(descriptor.estimatedBytes(), descriptor.files().stream().mapToLong(ModelFile::expectedBytes).sum());
+        long total = Math.max(
+                descriptor.estimatedBytes(),
+                descriptor.files().stream().mapToLong(ModelFile::expectedBytes).sum()
+        );
         DownloadCounter counter = new DownloadCounter(total);
 
         for (ModelFile file : descriptor.files()) {
@@ -152,21 +158,38 @@ public final class ModelManagerAgent {
     ) throws IOException, InterruptedException {
         Files.createDirectories(target.getParent());
         Path temp = target.resolveSibling(target.getFileName() + ".download");
-        Files.deleteIfExists(temp);
+        long existingBytes = Files.isRegularFile(temp) ? Files.size(temp) : 0L;
 
-        HttpRequest request = HttpRequest.newBuilder(file.downloadUri(descriptor.repository()))
-                .GET()
-                .build();
-        HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(
+                file.downloadUri(descriptor.repository(), descriptor.revision())
+        ).GET();
+        if (existingBytes > 0) {
+            requestBuilder.header("Range", "bytes=" + existingBytes + "-");
+        }
+
+        HttpResponse<InputStream> response = httpClient.send(
+                requestBuilder.build(),
+                HttpResponse.BodyHandlers.ofInputStream()
+        );
+        int status = response.statusCode();
+        if (status < 200 || status >= 300) {
             throw new IOException("Download failed. Try again.");
         }
 
-        long contentLength = response.headers().firstValueAsLong("Content-Length").orElse(file.expectedBytes());
-        long fileBytes = 0;
+        boolean resumed = existingBytes > 0 && status == 206;
+        long fileBytes = resumed ? existingBytes : 0L;
+        if (resumed) {
+            counter.add(existingBytes);
+        }
+
+        StandardOpenOption[] outputOptions = resumed
+                ? new StandardOpenOption[]{StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND}
+                : new StandardOpenOption[]{StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING};
+
+        long contentLength = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
         try (InputStream input = response.body();
-             OutputStream output = Files.newOutputStream(temp)) {
-            byte[] buffer = new byte[(int) DOWNLOAD_BUFFER_BYTES];
+             OutputStream output = Files.newOutputStream(temp, outputOptions)) {
+            byte[] buffer = new byte[DOWNLOAD_BUFFER_BYTES];
             int read;
             while ((read = input.read(buffer)) != -1) {
                 output.write(buffer, 0, read);
@@ -176,13 +199,19 @@ public final class ModelManagerAgent {
             }
         }
 
-        long expected = file.expectedBytes() > 0 ? file.expectedBytes() : contentLength;
-        if (expected > 0 && fileBytes < Math.round(expected * 0.95)) {
-            Files.deleteIfExists(temp);
-            throw new IOException("Download failed. Try again.");
+        long expected = file.expectedBytes() > 0
+                ? file.expectedBytes()
+                : (contentLength > 0 ? contentLength + (resumed ? existingBytes : 0L) : -1L);
+        if (expected > 0 && fileBytes != expected) {
+            throw new IOException("Download incomplete. It can be resumed on the next attempt.");
         }
 
-        Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        if (file.hasSha256() && !sha256(temp).equalsIgnoreCase(file.sha256())) {
+            Files.deleteIfExists(temp);
+            throw new IOException("Downloaded model file failed integrity verification.");
+        }
+
+        moveIntoPlace(temp, target);
     }
 
     private void validateLoadable(ModelDescriptor descriptor) throws IOException {
@@ -193,16 +222,35 @@ public final class ModelManagerAgent {
                  OrtSession ignoredEncoder = environment.createSession(root.resolve("onnx/encoder_model.onnx").toString(), options);
                  OrtSession.SessionOptions decoderOptions = new OrtSession.SessionOptions();
                  OrtSession ignoredDecoder = environment.createSession(root.resolve("onnx/decoder_model.onnx").toString(), decoderOptions)) {
-                // Opening both sessions is enough to catch corrupt model files.
+                // Opening both sessions catches corrupt or incompatible model files.
             }
         } catch (OrtException | RuntimeException e) {
             throw new IOException("Model file is invalid. Delete and re-download.", e);
         }
     }
 
+    private boolean isInstalledAtCurrentRevision(ModelStore store, ModelDescriptor descriptor) {
+        Path root = modelRoot(descriptor);
+        boolean filesPresent = descriptor.files().stream()
+                .allMatch(file -> Files.isRegularFile(root.resolve(file.relativePath())));
+        if (!filesPresent) {
+            return false;
+        }
+        return store.installed.stream().anyMatch(model ->
+                descriptor.id().equals(model.id)
+                        && descriptor.repository().equals(model.repository)
+                        && descriptor.revision().equals(model.revision)
+        );
+    }
+
     private void registerInstalled(ModelStore store, ModelDescriptor descriptor) {
         store.installed.removeIf(model -> descriptor.id().equals(model.id));
-        store.installed.add(new InstalledModel(descriptor.id(), Instant.now().toString(), descriptor.repository()));
+        store.installed.add(new InstalledModel(
+                descriptor.id(),
+                Instant.now().toString(),
+                descriptor.repository(),
+                descriptor.revision()
+        ));
     }
 
     private synchronized ModelStore loadStore() {
@@ -223,11 +271,44 @@ public final class ModelManagerAgent {
 
     private synchronized void saveStore(ModelStore store) throws IOException {
         Files.createDirectories(modelsDirectory);
-        mapper.writeValue(storePath().toFile(), store);
+        Path destination = storePath();
+        Path temp = destination.resolveSibling(destination.getFileName() + ".tmp");
+        mapper.writeValue(temp.toFile(), store);
+        moveIntoPlace(temp, destination);
     }
 
     private Path storePath() {
         return modelsDirectory.resolve("models.json");
+    }
+
+    private static String sha256(Path path) throws IOException {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is not available in this Java runtime.", e);
+        }
+        try (InputStream input = Files.newInputStream(path)) {
+            byte[] buffer = new byte[DOWNLOAD_BUFFER_BYTES];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                digest.update(buffer, 0, read);
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
+    private static void moveIntoPlace(Path source, Path target) throws IOException {
+        try {
+            Files.move(
+                    source,
+                    target,
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE
+            );
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
     private static final class DownloadCounter {
