@@ -51,6 +51,48 @@ jobs:
           name: jwhisper-cpu-${{ matrix.os }}
           path: build/libs/*cpu-all.jar
 
+  reference-transcription:
+    name: Reference transcription / tiny.en / JFK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Download OpenAI Whisper reference fixture
+        run: curl --fail --location --retry 3 --output build-jfk.flac https://raw.githubusercontent.com/openai/whisper/main/tests/jfk.flac
+
+      - name: Transcribe reference fixture
+        run: gradle -PjwhisperRuntime=cpu cli --args="build-jfk.flac --model tiny.en --download-model --output build-jfk.txt --quiet"
+
+      - name: Validate reference phrases
+        shell: bash
+        run: |
+          set -euo pipefail
+          normalized="$(tr '[:upper:]' '[:lower:]' < build-jfk.txt)"
+          grep -Fq "my fellow americans" <<<"$normalized"
+          grep -Fq "your country" <<<"$normalized"
+          grep -Fq "do for you" <<<"$normalized"
+          cat build-jfk.txt
+
+      - name: Upload reference transcript
+        uses: actions/upload-artifact@v4
+        with:
+          name: jwhisper-reference-jfk-transcript
+          path: build-jfk.txt
+
   apple-silicon:
     name: Apple Silicon CoreML jar
     runs-on: macos-26
