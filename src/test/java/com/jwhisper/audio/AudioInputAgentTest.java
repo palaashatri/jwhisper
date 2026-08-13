@@ -25,12 +25,22 @@ final class AudioInputAgentTest {
     }
 
     @Test
+    void acceptsSupportedVideoExtensionsForFfmpegAudioExtraction() throws Exception {
+        Path video = Files.createFile(tempDir.resolve("BigBuckBunny.MP4"));
+
+        AudioValidationResult result = new AudioInputAgent().validate(video);
+
+        assertTrue(result.isOk());
+        assertEquals(video.toAbsolutePath().normalize(), result.job().orElseThrow().file());
+    }
+
+    @Test
     void rejectsUnsupportedFilesWithSimpleMessage() throws Exception {
         Path text = Files.createFile(tempDir.resolve("notes.txt"));
 
         AudioValidationResult result = new AudioInputAgent().validate(text);
 
-        assertTrue(result.message().orElse("").contains("Unsupported audio file"));
+        assertTrue(result.message().orElse("").contains("Unsupported media file"));
     }
 
     @Test

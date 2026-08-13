@@ -1,28 +1,34 @@
-# jwhisper
+# JWhisper
 
-jwhisper is a small Java 17 Swing desktop app for local Whisper ONNX audio-to-text.
+JWhisper is a Java 17+ local Whisper transcription project built on ONNX Runtime. It currently ships a simple Swing desktop application and a headless CLI, with the inference/core code being hardened into a reusable JVM transcription runtime.
 
-<img width="1056" height="772" alt="Screenshot 2026-06-14 at 1 16 35 PM" src="https://github.com/user-attachments/assets/5ac0c99d-9440-4214-933b-324dca408659" />
+<img width="1056" height="772" alt="JWhisper desktop application" src="https://github.com/user-attachments/assets/5ac0c99d-9440-4214-933b-324dca408659" />
 
+Audio stays local during transcription. Model files are downloaded once into the user's JWhisper model store.
 
-It is designed to be simple on purpose: one window, drag-and-drop audio, local model storage, and offline transcription through ONNX Runtime.
-
-## Features
+## Current Features
 
 - Local Whisper ONNX transcription
-- Automatic first-run `tiny.en` setup
-- Model manager for optional larger models, with downloads that keep running if the manager window closes
-- Drag-and-drop audio and file chooser
+- Audio and video input through ffmpeg
+- Automatic first-run `tiny.en` setup in the desktop app
+- Revision-pinned model downloads with resumable partial downloads
+- SHA-256 verification for catalog files that have trusted hashes
+- Model manager with background downloads
+- Drag-and-drop media and file chooser
+- Headless command-line transcription
 - Transcript copy/save actions
-- Light and dark UI themes with macOS appearance detection
-- Main-window progress for model downloads and transcription
-- macOS menu bar integration
-- CPU, Apple Silicon/CoreML, CUDA, ROCm, and TensorRT provider selection
+- Light/dark desktop themes with macOS appearance detection
+- Cooperative plus native ONNX Runtime cancellation
+- CPU runtime, Apple/CoreML-oriented runtime variant, and CUDA-oriented GPU runtime variant
+- CI builds/tests on Windows, Linux, and macOS with JDK 17 and JDK 25
+- End-to-end reference transcription test using OpenAI Whisper's JFK fixture
+
+The production target and the evidence required for 100/100 readiness are defined in `AGENTS.md`. The live readiness score belongs in `TRUTH.md`.
 
 ## Requirements
 
 - Java 17 or newer
-- Gradle
+- Gradle for development builds
 - ffmpeg on `PATH`
 
 On macOS:
@@ -31,15 +37,15 @@ On macOS:
 brew install ffmpeg gradle
 ```
 
-## Run
+## Desktop App
 
 ```sh
 ./run.sh
 ```
 
-On Apple Silicon Macs, `run.sh` defaults to the Apple/CoreML runtime variant. On other machines it defaults to CPU.
+On Apple Silicon Macs, `run.sh` defaults to the Apple runtime variant. On other machines it defaults to CPU.
 
-Force a runtime variant:
+Force a build/runtime variant:
 
 ```sh
 JWHISPER_RUNTIME=cpu ./run.sh
@@ -54,33 +60,49 @@ JWHISPER_THEME=dark ./run.sh
 JWHISPER_THEME=light ./run.sh
 ```
 
-Without an override, jwhisper follows macOS light/dark appearance when running on macOS.
+## CLI
 
-## Hardware Providers
-
-Provider selection is automatic by default:
-
-- Apple Silicon build: prefers CoreML, then CPU fallback
-- GPU build: prefers CUDA, then ROCm, then TensorRT, then CPU fallback
-- CPU build: uses automatic provider detection with CPU fallback
-
-Force a provider:
+Transcribe an installed model:
 
 ```sh
-JWHISPER_PROVIDER=cpu ./run.sh
-JWHISPER_PROVIDER=coreml ./run.sh
-JWHISPER_PROVIDER=cuda JWHISPER_DEVICE_ID=0 ./run.sh
-JWHISPER_PROVIDER=rocm JWHISPER_DEVICE_ID=0 ./run.sh
-JWHISPER_PROVIDER=tensorrt JWHISPER_DEVICE_ID=0 ./run.sh
+gradle -PjwhisperRuntime=cpu cli --args="recording.mp3 --model tiny.en"
 ```
 
-By default, explicitly forced providers do not fall back silently. To allow fallback:
+Download the selected model if it is missing and write the result to a file:
 
 ```sh
-JWHISPER_PROVIDER=cuda JWHISPER_PROVIDER_FALLBACK=true ./run.sh
+gradle -PjwhisperRuntime=cpu cli --args="interview.mp4 --model tiny.en --download-model --output transcript.txt"
 ```
 
-CUDA/ROCm/TensorRT require the matching system drivers and native libraries installed on the target machine. The GPU jar packages ONNX Runtime GPU Java bindings, but it does not install NVIDIA or AMD drivers for you.
+The CLI accepts common audio formats plus `mp4`, `mkv`, `mov`, `webm`, `avi`, and `m4v`. ffmpeg extracts and resamples the media audio track to Whisper's mono 16 kHz input.
+
+## Demo Media
+
+The repository deliberately does not commit large third-party media files. The demo script fetches/prepares them in `build/demo-media`.
+
+Run both demos:
+
+```sh
+bash scripts/run-media-demos.sh all
+```
+
+Run just the no-speech regression:
+
+```sh
+bash scripts/run-media-demos.sh bbb
+```
+
+**Big Buck Bunny** is used as a hallucination/no-speech regression: JWhisper should not manufacture a substantial transcript from its non-dialogue soundtrack.
+
+Run the spoken-documentary demo:
+
+```sh
+bash scripts/run-media-demos.sh rip
+```
+
+**RiP!: A Remix Manifesto** is used as a realistic documentary stress test with narration/interview speech. The script prepares a five-minute sample and transcribes it locally.
+
+For a deterministic, small correctness gate, GitHub Actions also transcribes OpenAI Whisper's `tests/jfk.flac` fixture and requires the expected reference phrases.
 
 ## Models
 
@@ -90,52 +112,61 @@ Models live in:
 ~/.jwhisper/models
 ```
 
-On first launch, jwhisper downloads and preloads `tiny.en`. Use **Manage models...** to install larger models.
+Catalog models are pinned to immutable Hugging Face revisions. Interrupted `.download` files are retained so the next attempt can resume when the server supports HTTP Range requests. Files with a catalog SHA-256 must pass integrity verification before installation completes.
 
-Model downloads are owned by the main app, not the manager dialog. If you start a model download and close **Manage models...**, the download continues in the background, appears in the main model dropdown, and stays unavailable until it is ready. The main window shows model download progress while it runs.
+Because revision tracking is now part of installation metadata, older unpinned installations can be treated as stale and may need to be downloaded again.
 
-## Build
+## Execution Providers
 
-Build and test:
+JWhisper resolves execution providers at runtime, but actual availability depends on the native ONNX Runtime libraries packaged or installed for that artifact and platform.
+
+- CPU variant: CPU fallback is always the baseline.
+- Apple variant: prefers CoreML when the runtime exposes it, otherwise CPU.
+- GPU variant: uses the ONNX Runtime GPU Java artifact and prefers CUDA when available.
+
+Low-level provider overrides remain available for development/testing:
+
+```sh
+JWHISPER_PROVIDER=cpu ./run.sh
+JWHISPER_PROVIDER=coreml ./run.sh
+JWHISPER_PROVIDER=cuda JWHISPER_DEVICE_ID=0 ./run.sh
+JWHISPER_PROVIDER=tensorrt JWHISPER_DEVICE_ID=0 ./run.sh
+JWHISPER_PROVIDER=rocm JWHISPER_DEVICE_ID=0 ./run.sh
+```
+
+An override only works if that execution provider is actually present in the native ONNX Runtime build. Explicit provider requests do not silently fall back unless enabled:
+
+```sh
+JWHISPER_PROVIDER=cuda JWHISPER_PROVIDER_FALLBACK=true ./run.sh
+```
+
+## Build and Test
 
 ```sh
 ./run.sh build
-```
-
-Build a runnable jar:
-
-```sh
-./run.sh jar
-```
-
-Choose a runtime variant when building:
-
-```sh
-JWHISPER_RUNTIME=apple ./run.sh jar
-JWHISPER_RUNTIME=gpu ./run.sh jar
-```
-
-The runnable jar is written to:
-
-```sh
-build/libs/
-```
-
-## GitHub Actions
-
-The workflow in `.github/workflows/build-jars.yml` builds:
-
-- `jwhisper-apple-silicon-coreml`: Apple Silicon/CoreML runnable jar
-- `jwhisper-gpu-cuda-rocm`: GPU runnable jar using ONNX Runtime GPU bindings
-
-The GPU workflow builds the artifact on a standard Linux runner. GPU acceleration is used when that jar is run later on a machine with supported GPU drivers.
-
-## Useful Commands
-
-```sh
 ./run.sh test
 ./run.sh clean
-gradle -PjwhisperRuntime=cpu build
+```
+
+Build runnable fat jars:
+
+```sh
+gradle -PjwhisperRuntime=cpu fatJar
 gradle -PjwhisperRuntime=apple fatJar
 gradle -PjwhisperRuntime=gpu fatJar
 ```
+
+Artifacts are written under `build/libs/`.
+
+## CI
+
+`.github/workflows/build-jars.yml` currently validates:
+
+- CPU: Windows, Linux, macOS
+- JVM compatibility: JDK 17 and JDK 25
+- Apple runtime variant build/tests
+- CUDA-oriented GPU runtime variant build/tests
+- CLI startup on the desktop CPU matrix
+- End-to-end `tiny.en` transcription of OpenAI Whisper's JFK reference audio
+
+Successful compilation of an accelerated variant is not treated as proof of accelerated inference. Real provider execution/performance validation remains a separate production gate tracked in `TRUTH.md`.

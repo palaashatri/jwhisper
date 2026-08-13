@@ -24,6 +24,7 @@ java {
 dependencies {
     implementation "com.microsoft.onnxruntime:${onnxRuntimeArtifact}:1.26.0"
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.0'
+    implementation 'com.github.wendykierp:JTransforms:3.2'
 
     testImplementation 'org.junit.jupiter:junit-jupiter:6.1.0'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:6.1.0'
@@ -94,4 +95,48 @@ tasks.register('fatJar', Jar) {
             file.isDirectory() ? file : zipTree(file)
         }
     })
+}
+
+tasks.register('cli', JavaExec) {
+    group = 'application'
+    description = 'Runs the headless JWhisper CLI. Pass arguments with --args.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.jwhisper.cli.JWhisperCli'
+}
+
+tasks.register('printRuntimeClasspath') {
+    group = 'help'
+    description = 'Prints the main runtime classpath for demo and integration scripts.'
+    dependsOn tasks.named('classes')
+    doLast {
+        println sourceSets.main.runtimeClasspath.asPath
+    }
+}
+
+tasks.register('packageAppImage', Exec) {
+    group = 'distribution'
+    description = 'Builds a self-contained desktop app image with jpackage.'
+    dependsOn tasks.named('fatJar')
+    doFirst {
+        def windows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('win')
+        def jpackage = new File(System.getProperty('java.home'), 'bin/' + (windows ? 'jpackage.exe' : 'jpackage'))
+        if (!jpackage.isFile()) {
+            throw new GradleException("jpackage was not found in the selected JDK: ${jpackage}")
+        }
+        def destination = layout.buildDirectory.dir('package').get().asFile
+        delete destination
+        destination.mkdirs()
+        commandLine(
+                jpackage.absolutePath,
+                '--type', 'app-image',
+                '--name', 'JWhisper',
+                '--dest', destination.absolutePath,
+                '--input', layout.buildDirectory.dir('libs').get().asFile.absolutePath,
+                '--main-jar', tasks.named('fatJar').get().archiveFileName.get(),
+                '--main-class', application.mainClass.get(),
+                '--app-version', projectVersion,
+                '--description', 'Local-first Whisper transcription for the JVM',
+                '--java-options', "-Djwhisper.runtimeVariant=${runtimeVariant}"
+        )
+    }
 }
