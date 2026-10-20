@@ -23,7 +23,7 @@ Audio stays local during transcription. Model files are downloaded once into the
 - CI builds/tests on Windows, Linux, and macOS with JDK 17 and JDK 25
 - End-to-end reference transcription test using OpenAI Whisper's JFK fixture
 
-The production target and the evidence required for 100/100 readiness are defined in `AGENTS.md`. The live readiness score belongs in `TRUTH.md`.
+The production-readiness definition and evidence ledger are in [`docs/READINESS.md`](docs/READINESS.md). Contributor and coding-agent instructions are in [`AGENTS.md`](AGENTS.md).
 
 ## Requirements
 
@@ -169,4 +169,4 @@ Artifacts are written under `build/libs/`.
 - CLI startup on the desktop CPU matrix
 - End-to-end `tiny.en` transcription of OpenAI Whisper's JFK reference audio
 
-Successful compilation of an accelerated variant is not treated as proof of accelerated inference. Real provider execution/performance validation remains a separate production gate tracked in `TRUTH.md`.
+Successful compilation of an accelerated variant is not treated as proof of accelerated inference. Real provider execution/performance validation remains a separate production gate tracked in [`docs/READINESS.md`](docs/READINESS.md).
