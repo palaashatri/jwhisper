@@ -42,23 +42,38 @@ public final class TranscriptionAgent implements AutoCloseable {
             ModelDescriptor model,
             TranscriptionListener listener
     ) {
+        return transcribeResult(audioJob, model, TranscriptionOptions.defaults(), listener)
+                .thenApply(TranscriptionResult::text);
+    }
+
+    public CompletableFuture<TranscriptionResult> transcribeResult(
+            AudioJob audioJob,
+            ModelDescriptor model,
+            TranscriptionListener listener
+    ) {
+        return transcribeResult(audioJob, model, TranscriptionOptions.defaults(), listener);
+    }
+
+    public CompletableFuture<TranscriptionResult> transcribeResult(
+            AudioJob audioJob,
+            ModelDescriptor model,
+            TranscriptionOptions options,
+            TranscriptionListener listener
+    ) {
         Objects.requireNonNull(listener, "listener");
-        CompletableFuture<String> future = new CompletableFuture<>();
+        CompletableFuture<TranscriptionResult> future = new CompletableFuture<>();
         AtomicReference<FutureTask<?>> taskRef = new AtomicReference<>();
         FutureTask<Void> task = new FutureTask<>(() -> {
             try {
-                if (!dependencyReport.canTranscribe()) {
-                    throw new WhisperException(dependencyReport.firstUserMessage());
-                }
-                if (model == null) {
-                    throw new WhisperException("No models installed.");
-                }
-                if (!modelManagerAgent.isInstalled(model)) {
-                    throw new WhisperException("No models installed.");
-                }
-                TranscriptionJob job = new TranscriptionJob(model, modelManagerAgent.modelRoot(model), audioJob);
+                if (!dependencyReport.canTranscribe()) throw new WhisperException(dependencyReport.firstUserMessage());
+                if (model == null) throw new WhisperException("No models installed.");
+                if (!modelManagerAgent.isInstalled(model)) throw new WhisperException("No models installed.");
+                TranscriptionJob job = new TranscriptionJob(
+                        model, modelManagerAgent.modelRoot(model), audioJob,
+                        options == null ? TranscriptionOptions.defaults() : options
+                );
                 whisperEngineAgent.loadModel(model, job.modelRoot());
-                future.complete(whisperEngineAgent.transcribe(job, listener));
+                future.complete(whisperEngineAgent.transcribeResult(job, listener));
             } catch (Throwable e) {
                 future.completeExceptionally(e);
             } finally {
@@ -94,9 +109,7 @@ public final class TranscriptionAgent implements AutoCloseable {
     public void cancel() {
         whisperEngineAgent.cancel();
         Future<?> task = currentTask.getAndSet(null);
-        if (task != null) {
-            task.cancel(true);
-        }
+        if (task != null) task.cancel(true);
     }
 
     @Override

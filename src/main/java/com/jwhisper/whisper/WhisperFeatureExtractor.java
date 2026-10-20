@@ -1,6 +1,6 @@
 package com.jwhisper.whisper;
 
-import java.util.Arrays;
+import org.jtransforms.fft.DoubleFFT_1D;
 
 public final class WhisperFeatureExtractor {
     private static final double MEL_MIN_HZ = 0.0;
@@ -8,24 +8,14 @@ public final class WhisperFeatureExtractor {
 
     private final WhisperPreprocessorConfig config;
     private final double[] hannWindow;
-    private final double[][] cosTable;
-    private final double[][] sinTable;
     private final float[][] melFilters;
+    private final DoubleFFT_1D fft;
 
     public WhisperFeatureExtractor(WhisperPreprocessorConfig config) {
         this.config = config;
         this.hannWindow = hannWindow(config.nFft());
-        int bins = config.nFft() / 2 + 1;
-        this.cosTable = new double[bins][config.nFft()];
-        this.sinTable = new double[bins][config.nFft()];
-        for (int k = 0; k < bins; k++) {
-            for (int n = 0; n < config.nFft(); n++) {
-                double angle = 2.0 * Math.PI * k * n / config.nFft();
-                cosTable[k][n] = Math.cos(angle);
-                sinTable[k][n] = Math.sin(angle);
-            }
-        }
         this.melFilters = melFilters(config.featureSize(), config.nFft(), config.samplingRate());
+        this.fft = new DoubleFFT_1D(config.nFft());
     }
 
     public int maxSamples() {
@@ -36,25 +26,28 @@ public final class WhisperFeatureExtractor {
         float[] chunk = new float[config.nSamples()];
         System.arraycopy(samples, 0, chunk, 0, Math.min(samples.length, chunk.length));
 
-        int bins = config.nFft() / 2 + 1;
+        int nFft = config.nFft();
+        int bins = nFft / 2 + 1;
         float[][] logMels = new float[config.featureSize()][config.nbMaxFrames()];
+        double[] fftBuffer = new double[nFft * 2];
         double[] power = new double[bins];
         double maxLog = -Double.MAX_VALUE;
 
         for (int frame = 0; frame < config.nbMaxFrames(); frame++) {
-            Arrays.fill(power, 0.0);
-            int frameStart = frame * config.hopLength() - config.nFft() / 2;
-            for (int k = 0; k < bins; k++) {
-                double real = 0.0;
-                double imaginary = 0.0;
-                for (int n = 0; n < config.nFft(); n++) {
-                    int sampleIndex = frameStart + n;
-                    double sample = sampleIndex >= 0 && sampleIndex < chunk.length ? chunk[sampleIndex] : 0.0;
-                    sample *= hannWindow[n];
-                    real += sample * cosTable[k][n];
-                    imaginary -= sample * sinTable[k][n];
-                }
-                power[k] = real * real + imaginary * imaginary;
+            int frameStart = frame * config.hopLength() - nFft / 2;
+            for (int n = 0; n < nFft; n++) {
+                int sampleIndex = reflectIndex(frameStart + n, chunk.length);
+                fftBuffer[n] = chunk[sampleIndex] * hannWindow[n];
+            }
+            for (int n = nFft; n < fftBuffer.length; n++) {
+                fftBuffer[n] = 0.0;
+            }
+
+            fft.realForwardFull(fftBuffer);
+            for (int bin = 0; bin < bins; bin++) {
+                double real = fftBuffer[2 * bin];
+                double imaginary = fftBuffer[2 * bin + 1];
+                power[bin] = real * real + imaginary * imaginary;
             }
 
             for (int mel = 0; mel < config.featureSize(); mel++) {
@@ -79,6 +72,22 @@ public final class WhisperFeatureExtractor {
         }
 
         return new float[][][]{logMels};
+    }
+
+    private static int reflectIndex(int index, int length) {
+        if (length <= 1) {
+            return 0;
+        }
+        int reflected = index;
+        while (reflected < 0 || reflected >= length) {
+            if (reflected < 0) {
+                reflected = -reflected;
+            }
+            if (reflected >= length) {
+                reflected = 2 * length - 2 - reflected;
+            }
+        }
+        return reflected;
     }
 
     private static double[] hannWindow(int size) {
