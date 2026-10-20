@@ -4,6 +4,12 @@ JWhisper is a local-first Whisper speech-to-text runtime for the JVM (Java 17+, 
 
 What "production-ready" means, and the evidence recorded so far, is in [`docs/READINESS.md`](docs/READINESS.md). This file tells agents how to work in the repository.
 
+## Current state (2026-10-20)
+
+- PR #1 is merged: FFT preprocessing, KV-cache decoding, beam search, temperature fallback, timestamp-based long-form seeking, pinned and SHA-256-verified models, a headless CLI, and CI on Linux/macOS/Windows with an end-to-end JFK transcription gate.
+- **Biggest gap:** the CLI and the desktop app both call the engine with `TranscriptionOptions.defaults()`. Language, translate, beam size, timestamps and the SRT/VTT/JSON exporters exist in the code but no user can reach them. Wire options through before adding new engine features.
+- No Gradle wrapper is checked in; the CI reference audio is fetched from `openai/whisper` `main` (unpinned).
+
 ## Commands
 
 Requirements: JDK 17+, Gradle (no wrapper is checked in yet), `ffmpeg` on `PATH`.
@@ -56,6 +62,6 @@ End-to-end check (the CI reference gate): transcribe OpenAI's `tests/jfk.flac` w
 
 ## Git workflow and done
 
-- Never push to `main`; branch and open a PR.
+- Branch and open a PR unless the owner explicitly asks for a direct push to `main`.
 - Before pushing: `gradle -PjwhisperRuntime=cpu clean test fatJar` passes and, for engine changes, the JFK end-to-end transcription still matches.
 - New decoding or preprocessing behaviour comes with tests against reference values; new export formats with golden-file tests.

@@ -78,8 +78,10 @@ JWhisper is 100/100 only when every mandatory gate below passes. Documentation c
 
 ## Evidence ledger
 
-No points have been formally awarded yet. Evidence available as of 2026-10-20 (branch `chatgpt/jwhisper-100`, PR #1):
+No points have been formally awarded yet. Evidence available as of 2026-10-20 (`main`, after PR #1 was merged):
 
 - CI builds and tests CPU jars on Linux, macOS and Windows with JDK 17 and 25, plus Apple (CoreML) and GPU (CUDA) jar variants. Compiling an accelerated variant is not evidence that acceleration works.
 - CI end-to-end gate: `tiny.en` transcribes OpenAI's `jfk.flac` reference clip and the expected phrases are checked.
 - Not yet evidenced: WER on a real test set, multilingual/long-form/noisy fixtures, accelerated-provider execution, benchmarks (RTF, tokens/s, RSS), signed/notarized packages.
+- Reachability gap (2026-10-20 audit): the engine implements language selection, `translate`, beam search, temperature fallback, timestamps and TXT/JSON/SRT/VTT export (`TranscriptionOptions`, `export/TranscriptionExporter`), but **neither the CLI nor the desktop app uses them** — both always run `TranscriptionOptions.defaults()`, and the CLI accepts only `--model`, `--download-model`, `--output` and `--quiet`. Points in §3.4 for CLI options and export formats can't be awarded until users can reach them.
+- The CI reference fixture is downloaded from `openai/whisper` at `main`, not a pinned commit, so the end-to-end gate is not reproducible if that file changes.

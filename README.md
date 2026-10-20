@@ -140,6 +140,18 @@ An override only works if that execution provider is actually present in the nat
 JWHISPER_PROVIDER=cuda JWHISPER_PROVIDER_FALLBACK=true ./run.sh
 ```
 
+## Roadmap
+
+In priority order — each is something a user would notice:
+
+1. **Expose what the engine already does.** CLI flags and desktop controls for language, transcribe/translate, timestamps and output format (TXT, SRT, VTT, JSON). The code for all of these exists; nothing calls it yet.
+2. **Subtitles workflow:** drop a video, get an `.srt` next to it, with a preview of timed segments.
+3. **Batch transcription:** drop a folder or many files and get a queue with per-file progress.
+4. **No-setup installers:** `jpackage` builds (the `packageAppImage` task exists) with ffmpeg bundled or auto-installed, so users need neither a JDK nor Homebrew.
+5. **Live dictation:** transcribe from the microphone in near real time.
+6. **Proven acceleration:** benchmark CPU vs CoreML vs CUDA (real-time factor, memory) on real hardware and publish the numbers.
+7. **A reusable `jwhisper-core` library** published as a Maven artifact for other JVM apps.
+
 ## Build and Test
 
 ```sh
