@@ -182,3 +182,9 @@ Artifacts are written under `build/libs/`.
 - End-to-end `tiny.en` transcription of OpenAI Whisper's JFK reference audio
 
 Successful compilation of an accelerated variant is not treated as proof of accelerated inference. Real provider execution/performance validation remains a separate production gate tracked in [`docs/READINESS.md`](docs/READINESS.md).
+
+## Future SLOPOS desktop, PARAMA and low-memory targets
+
+**Planned, not implemented:** jwhisper is an independently authored candidate for the optional SLOPOS Dictation transcription provider (not always-on service). Target supported **Linux/SLOPOS** desktop integration first; any native **PARAMA/SURYA** port depends on the real kernel, runtime, graphics/input, filesystem and native-library requirements specified in [AGENTS.md](AGENTS.md#future-sloposparama-integration-and-pi-zero-2-w-efficiency-goals). The aim is high-quality useful work on constrained hardware, not a claim that every heavy workload fits.
+
+**Pi Zero 2 W (512 MB, quad Cortex-A53) profile:** Offer a small/quantized model only where its actual footprint and CPU kernel support are validated; stream and chunk audio, cap decoder state/temp arrays, queue length, CPU threads and previews. Model manager must preflight weights + ONNX runtime + Java heap/native allocations against remaining RAM, reject unsupported models before OOM, and never claim a 512 MB full-size model fits. Auto-start no model and never upload audio without explicit opt-in. Validate actual app/runtime compatibility and performance on the board; **no verified Zero 2 W or native PARAMA support is claimed here**. Installation should be optional, with no eager services or model downloads in the lightweight SLOPOS base image.
