@@ -7,7 +7,7 @@ What "production-ready" means, and the evidence recorded so far, is in [`docs/RE
 ## Current state (2026-10-20)
 
 - PR #1 is merged: FFT preprocessing, KV-cache decoding, beam search, temperature fallback, timestamp-based long-form seeking, pinned and SHA-256-verified models, a headless CLI, and CI on Linux/macOS/Windows with an end-to-end JFK transcription gate.
-- **Biggest gap:** the CLI and the desktop app both call the engine with `TranscriptionOptions.defaults()`. Language, translate, beam size, timestamps and the SRT/VTT/JSON exporters exist in the code but no user can reach them. Wire options through before adding new engine features.
+- CLI now accepts `--language`, `--task` (transcribe|translate), and `--beam-size` and passes them via TranscriptionOptions. Desktop UI wiring remains a follow-up.
 - No Gradle wrapper is checked in; the CI reference audio is fetched from `openai/whisper` `main` (unpinned).
 
 ## Commands
