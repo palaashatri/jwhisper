@@ -9,6 +9,8 @@ import com.jwhisper.model.ModelDescriptor;
 import com.jwhisper.model.ModelManagerAgent;
 import com.jwhisper.platform.PlatformAgent;
 import com.jwhisper.transcribe.TranscriptionAgent;
+import com.jwhisper.transcribe.TranscriptionOptions;
+import com.jwhisper.transcribe.TranscriptionTask;
 import com.jwhisper.transcribe.TranscriptionListener;
 import com.jwhisper.whisper.WhisperOnnxEngine;
 
@@ -87,11 +89,19 @@ public final class JWhisperCli {
                 dependencyReport,
                 new WhisperOnnxEngine()
         )) {
-            String transcript = transcription.transcribe(
+            TranscriptionOptions tOpts = new TranscriptionOptions(
+                    options.language(),
+                    "translate".equalsIgnoreCase(options.task()) ? TranscriptionTask.TRANSLATE : TranscriptionTask.TRANSCRIBE,
+                    true,  // timestamps
+                    options.beamSize(),
+                    null, null, null, null, true, null
+            );
+            String transcript = transcription.transcribeResult(
                     media.job().orElseThrow(),
                     model,
+                    tOpts,
                     new ConsoleListener(options.quiet())
-            ).join();
+            ).join().text();
 
             if (options.output() != null) {
                 Path parent = options.output().toAbsolutePath().normalize().getParent();
@@ -143,14 +153,17 @@ public final class JWhisperCli {
             boolean downloadModel,
             Path output,
             boolean quiet,
-            boolean help
+            boolean help,
+            String language,
+            String task,
+            int beamSize
     ) {
         private static CliOptions parse(String[] args) {
             if (args.length == 0) {
                 throw new IllegalArgumentException("Missing input media file.");
             }
             if (args.length == 1 && "--help".equals(args[0])) {
-                return new CliOptions(null, "tiny.en", false, null, false, true);
+                return new CliOptions(null, "tiny.en", false, null, false, true, null, "transcribe", 1);
             }
 
             Path input = Path.of(args[0]);
@@ -158,6 +171,9 @@ public final class JWhisperCli {
             boolean download = false;
             Path output = null;
             boolean quiet = false;
+            String language = null;
+            String task = "transcribe";
+            int beamSize = 1;
 
             for (int i = 1; i < args.length; i++) {
                 switch (args[i]) {
@@ -175,13 +191,25 @@ public final class JWhisperCli {
                         output = Path.of(args[i]);
                     }
                     case "--quiet" -> quiet = true;
+                    case "--language" -> {
+                        if (++i >= args.length) throw new IllegalArgumentException("--language requires a value.");
+                        language = args[i];
+                    }
+                    case "--task" -> {
+                        if (++i >= args.length) throw new IllegalArgumentException("--task requires a value.");
+                        task = args[i];
+                    }
+                    case "--beam-size" -> {
+                        if (++i >= args.length) throw new IllegalArgumentException("--beam-size requires a value.");
+                        beamSize = Integer.parseInt(args[i]);
+                    }
                     case "--help" -> {
-                        return new CliOptions(input, model, download, output, quiet, true);
+                        return new CliOptions(input, model, download, output, quiet, true, language, task, beamSize);
                     }
                     default -> throw new IllegalArgumentException("Unknown option: " + args[i]);
                 }
             }
-            return new CliOptions(input, model, download, output, quiet, false);
+            return new CliOptions(input, model, download, output, quiet, false, language, task, beamSize);
         }
     }
 
