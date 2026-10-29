@@ -62,7 +62,10 @@ final class AudioInputAgentTest {
         Path clipA = Files.createFile(folder.resolve("01-intro.flac"));
         Files.createFile(folder.resolve("notes.md"));
         Path hiddenDir = Files.createDirectories(folder.resolve(".hidden"));
+        Path deepHidden = Files.createDirectories(hiddenDir.resolve("nested"));
         Files.createFile(hiddenDir.resolve("secret.wav"));
+        Files.createFile(deepHidden.resolve("deep-secret.flac"));
+        Files.createFile(folder.resolve(".DS_Store.wav"));
 
         AudioInputAgent.BatchSelection batch = new AudioInputAgent().collectMedia(List.of(folder, clipA));
 

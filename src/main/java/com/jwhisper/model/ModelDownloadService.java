@@ -9,6 +9,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class ModelDownloadService implements AutoCloseable {
     private final ModelManagerAgent modelManagerAgent;
@@ -48,6 +49,7 @@ public final class ModelDownloadService implements AutoCloseable {
         }
 
         AtomicBoolean cancelFlag = new AtomicBoolean(false);
+        AtomicReference<Future<?>> attemptFutureRef = new AtomicReference<>();
         cancelFlags.put(descriptor.id(), cancelFlag);
         ModelDownloadState pending = new ModelDownloadState(
                 descriptor,
@@ -57,8 +59,13 @@ public final class ModelDownloadService implements AutoCloseable {
                 null
         );
         update(pending);
-        Future<?> future = executorService.submit(() -> runDownload(descriptor, cancelFlag));
-        futures.put(descriptor.id(), future);
+        Future<?> future = executorService.submit(() -> runDownload(descriptor, cancelFlag, attemptFutureRef));
+        attemptFutureRef.set(future);
+        if (cancelFlags.get(descriptor.id()) == cancelFlag && !cancelFlag.get()) {
+            futures.put(descriptor.id(), future);
+        } else if (cancelFlag.get()) {
+            future.cancel(true);
+        }
         return pending;
     }
 
@@ -66,23 +73,32 @@ public final class ModelDownloadService implements AutoCloseable {
         if (descriptor == null) {
             return;
         }
-        AtomicBoolean flag = cancelFlags.get(descriptor.id());
+        String id = descriptor.id();
+        AtomicBoolean flag = cancelFlags.get(id);
         if (flag != null) {
             flag.set(true);
         }
-        Future<?> future = futures.remove(descriptor.id());
+        Future<?> future = futures.remove(id);
         if (future != null) {
             future.cancel(true);
         }
-        ModelDownloadState current = states.get(descriptor.id());
-        if (current != null && current.isActive()) {
-            update(new ModelDownloadState(
+        AtomicReference<ModelDownloadState> canceledPublished = new AtomicReference<>();
+        states.computeIfPresent(id, (key, current) -> {
+            if (!current.isActive()) {
+                return current;
+            }
+            ModelDownloadState canceled = new ModelDownloadState(
                     descriptor,
                     ModelDownloadStatus.CANCELED,
                     current.fraction(),
                     descriptor.displayName() + " download canceled (partial progress saved).",
                     null
-            ));
+            );
+            canceledPublished.set(canceled);
+            return canceled;
+        });
+        if (canceledPublished.get() != null) {
+            notifyListeners(canceledPublished.get());
         }
     }
 
@@ -121,64 +137,127 @@ public final class ModelDownloadService implements AutoCloseable {
         executorService.shutdownNow();
     }
 
-    private void runDownload(ModelDescriptor descriptor, AtomicBoolean cancelFlag) {
+    private void runDownload(
+            ModelDescriptor descriptor,
+            AtomicBoolean cancelFlag,
+            AtomicReference<Future<?>> attemptFutureRef
+    ) {
+        String id = descriptor.id();
         try {
-            if (cancelFlag.get()) {
+            if (!updateIfCurrent(
+                    cancelFlag,
+                    new ModelDownloadState(descriptor, ModelDownloadStatus.RUNNING, 0.0, "Downloading " + descriptor.displayName() + "...", null)
+            )) {
                 return;
             }
-            update(new ModelDownloadState(descriptor, ModelDownloadStatus.RUNNING, 0.0, "Downloading " + descriptor.displayName() + "...", null));
             modelManagerAgent.downloadModel(descriptor, (fraction, status) -> {
                 if (!cancelFlag.get()) {
-                    update(new ModelDownloadState(
-                            descriptor,
-                            ModelDownloadStatus.RUNNING,
-                            fraction,
-                            descriptor.displayName() + ": " + status,
-                            null
-                    ));
+                    updateIfCurrent(
+                            cancelFlag,
+                            new ModelDownloadState(
+                                    descriptor,
+                                    ModelDownloadStatus.RUNNING,
+                                    fraction,
+                                    descriptor.displayName() + ": " + status,
+                                    null
+                            )
+                    );
                 }
             }, cancelFlag::get);
             if (!cancelFlag.get()) {
-                update(new ModelDownloadState(descriptor, ModelDownloadStatus.SUCCEEDED, 1.0, descriptor.displayName() + " ready.", null));
+                updateIfCurrent(
+                        cancelFlag,
+                        new ModelDownloadState(descriptor, ModelDownloadStatus.SUCCEEDED, 1.0, descriptor.displayName() + " ready.", null)
+                );
             }
         } catch (InterruptedException e) {
             // Clear interrupt status so the shared single-thread download executor remains usable.
             Thread.interrupted();
-            ModelDownloadState prev = states.get(descriptor.id());
-            double prevFraction = prev == null ? 0.0 : prev.fraction();
-            if (cancelFlag.get() || (prev != null && prev.status() == ModelDownloadStatus.CANCELED)) {
-                update(new ModelDownloadState(
-                        descriptor,
-                        ModelDownloadStatus.CANCELED,
-                        prevFraction,
-                        descriptor.displayName() + " download canceled (partial progress saved).",
-                        null
-                ));
-            } else {
-                update(new ModelDownloadState(descriptor, ModelDownloadStatus.FAILED, prevFraction, "Download interrupted.", "Download interrupted."));
+            if (cancelFlags.get(id) == cancelFlag) {
+                ModelDownloadState prev = states.get(id);
+                double prevFraction = prev == null ? 0.0 : prev.fraction();
+                if (cancelFlag.get() || (prev != null && prev.status() == ModelDownloadStatus.CANCELED)) {
+                    updateIfCurrent(
+                            cancelFlag,
+                            new ModelDownloadState(
+                                    descriptor,
+                                    ModelDownloadStatus.CANCELED,
+                                    prevFraction,
+                                    descriptor.displayName() + " download canceled (partial progress saved).",
+                                    null
+                            )
+                    );
+                } else {
+                    updateIfCurrent(
+                            cancelFlag,
+                            new ModelDownloadState(descriptor, ModelDownloadStatus.FAILED, prevFraction, "Download interrupted.", "Download interrupted.")
+                    );
+                }
             }
         } catch (Exception e) {
             Thread.interrupted();
-            ModelDownloadState prev = states.get(descriptor.id());
-            double prevFraction = prev == null ? 0.0 : prev.fraction();
-            if (cancelFlag.get() || (prev != null && prev.status() == ModelDownloadStatus.CANCELED)) {
-                update(new ModelDownloadState(
-                        descriptor,
-                        ModelDownloadStatus.CANCELED,
-                        prevFraction,
-                        descriptor.displayName() + " download canceled (partial progress saved).",
-                        null
-                ));
-            } else {
-                update(new ModelDownloadState(descriptor, ModelDownloadStatus.FAILED, prevFraction, "Download failed. Try again.", userMessage(e)));
+            if (cancelFlags.get(id) == cancelFlag) {
+                ModelDownloadState prev = states.get(id);
+                double prevFraction = prev == null ? 0.0 : prev.fraction();
+                if (cancelFlag.get() || (prev != null && prev.status() == ModelDownloadStatus.CANCELED)) {
+                    updateIfCurrent(
+                            cancelFlag,
+                            new ModelDownloadState(
+                                    descriptor,
+                                    ModelDownloadStatus.CANCELED,
+                                    prevFraction,
+                                    descriptor.displayName() + " download canceled (partial progress saved).",
+                                    null
+                            )
+                    );
+                } else {
+                    updateIfCurrent(
+                            cancelFlag,
+                            new ModelDownloadState(descriptor, ModelDownloadStatus.FAILED, prevFraction, "Download failed. Try again.", userMessage(e))
+                    );
+                }
             }
         } finally {
-            futures.remove(descriptor.id());
+            Future<?> attemptFuture = attemptFutureRef.get();
+            if (attemptFuture != null) {
+                futures.remove(id, attemptFuture);
+            } else if (cancelFlags.get(id) == cancelFlag) {
+                futures.remove(id);
+            }
+            cancelFlags.remove(id, cancelFlag);
         }
+    }
+
+    private boolean updateIfCurrent(AtomicBoolean attemptFlag, ModelDownloadState nextState) {
+        String id = nextState.descriptor().id();
+        AtomicBoolean published = new AtomicBoolean(false);
+        states.compute(id, (key, current) -> {
+            if (cancelFlags.get(id) != attemptFlag) {
+                return current;
+            }
+            if (nextState.status() != ModelDownloadStatus.CANCELED) {
+                if (attemptFlag.get() || (current != null && current.status() == ModelDownloadStatus.CANCELED)) {
+                    return current;
+                }
+            } else if (current != null && current.status() == ModelDownloadStatus.CANCELED) {
+                return current;
+            }
+            published.set(true);
+            return nextState;
+        });
+        if (published.get()) {
+            notifyListeners(nextState);
+            return true;
+        }
+        return false;
     }
 
     private void update(ModelDownloadState state) {
         states.put(state.descriptor().id(), state);
+        notifyListeners(state);
+    }
+
+    private void notifyListeners(ModelDownloadState state) {
         for (ModelDownloadListener listener : listeners) {
             listener.onModelDownloadChanged(state);
         }

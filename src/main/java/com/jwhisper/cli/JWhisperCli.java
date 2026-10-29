@@ -24,11 +24,14 @@ import com.jwhisper.whisper.WhisperExecutionProvider;
 import com.jwhisper.whisper.WhisperOnnxEngine;
 import com.jwhisper.whisper.WhisperProviderConfig;
 
+import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashSet;
@@ -127,6 +130,10 @@ public final class JWhisperCli {
             err.println("Use --output-dir <directory> when exporting multiple files as " + format.name() + ".");
             return 2;
         }
+        if (effectiveOutputFile != null && matchesAnyInputMedia(effectiveOutputFile, jobs)) {
+            err.println("--output must not overwrite an input media file: " + effectiveOutputFile.toAbsolutePath().normalize());
+            return 2;
+        }
 
         ModelDescriptor model = ModelCatalog.find(options.modelId()).orElse(null);
         if (model == null) {
@@ -181,14 +188,14 @@ public final class JWhisperCli {
             }
         }
 
+        List<TranscriptionExporter.BatchEntry> stdoutEntries = new ArrayList<>();
+        boolean includeTimestamps = transcriptionOptions.timestamps();
         try (TranscriptionAgent transcription = new TranscriptionAgent(
                 modelManager,
                 dependencyReport,
                 new WhisperOnnxEngine(providerConfig)
         )) {
             Set<Path> usedOutputPaths = new HashSet<>();
-            List<TranscriptionExporter.BatchEntry> stdoutEntries = new ArrayList<>();
-            boolean includeTimestamps = transcriptionOptions.timestamps();
             for (int index = 0; index < jobs.size(); index++) {
                 AudioJob job = jobs.get(index);
                 if (jobs.size() > 1 && !options.quiet()) {
@@ -202,15 +209,26 @@ public final class JWhisperCli {
                         new ConsoleListener(options.quiet(), err)
                 ).join();
 
-                Path target = resolveTargetFile(job.file(), effectiveOutputFile, effectiveOutputDir, format, usedOutputPaths);
-                if (target != null) {
+                if (effectiveOutputFile != null || effectiveOutputDir != null) {
                     String rendered = TranscriptionExporter.render(result, format, includeTimestamps);
-                    Path normalizedTarget = target.toAbsolutePath().normalize();
-                    Path parent = normalizedTarget.getParent();
-                    if (parent != null) {
-                        Files.createDirectories(parent);
+                    Path normalizedTarget;
+                    if (effectiveOutputFile != null) {
+                        normalizedTarget = effectiveOutputFile.toAbsolutePath().normalize();
+                        Path parent = normalizedTarget.getParent();
+                        if (parent != null) {
+                            Files.createDirectories(parent);
+                        }
+                        Files.writeString(normalizedTarget, rendered, StandardCharsets.UTF_8);
+                    } else {
+                        Files.createDirectories(effectiveOutputDir);
+                        normalizedTarget = writeCollisionSafeBatchFile(
+                                job.file(),
+                                effectiveOutputDir,
+                                format,
+                                rendered,
+                                usedOutputPaths
+                        );
                     }
-                    Files.writeString(normalizedTarget, rendered, StandardCharsets.UTF_8);
                     if (!options.quiet()) {
                         err.println("Transcript written to " + normalizedTarget);
                     }
@@ -218,23 +236,36 @@ public final class JWhisperCli {
                     stdoutEntries.add(new TranscriptionExporter.BatchEntry(job.file().getFileName().toString(), result));
                 }
             }
-            if (!stdoutEntries.isEmpty()) {
-                String rendered = stdoutEntries.size() == 1
-                        ? TranscriptionExporter.render(stdoutEntries.get(0).result(), format, includeTimestamps)
-                        : TranscriptionExporter.renderBatch(stdoutEntries, format, includeTimestamps);
-                out.print(rendered);
-                if (!rendered.endsWith("\n")) {
-                    out.println();
-                }
-            }
+            flushStdoutEntries(out, stdoutEntries, format, includeTimestamps);
             return 0;
         } catch (CompletionException e) {
+            flushStdoutEntries(out, stdoutEntries, format, includeTimestamps);
             err.println("Transcription failed: " + firstMessage(e.getCause() == null ? e : e.getCause()));
             return 8;
         } catch (Exception e) {
+            flushStdoutEntries(out, stdoutEntries, format, includeTimestamps);
             err.println("Transcription failed: " + firstMessage(e));
             return 8;
         }
+    }
+
+    private static void flushStdoutEntries(
+            PrintStream out,
+            List<TranscriptionExporter.BatchEntry> stdoutEntries,
+            OutputFormat format,
+            boolean includeTimestamps
+    ) {
+        if (stdoutEntries.isEmpty()) {
+            return;
+        }
+        String rendered = stdoutEntries.size() == 1
+                ? TranscriptionExporter.render(stdoutEntries.get(0).result(), format, includeTimestamps)
+                : TranscriptionExporter.renderBatch(stdoutEntries, format, includeTimestamps);
+        out.print(rendered);
+        if (!rendered.endsWith("\n")) {
+            out.println();
+        }
+        stdoutEntries.clear();
     }
 
     static TranscriptionOptions buildTranscriptionOptions(CliOptions options) {
@@ -251,21 +282,53 @@ public final class JWhisperCli {
     }
 
     static WhisperProviderConfig resolveProviderConfig(CliOptions options) {
-        if (options.provider() != null) {
-            int deviceId = options.deviceId() == null ? 0 : options.deviceId();
-            boolean fallback = Boolean.TRUE.equals(options.providerFallback());
-            return WhisperProviderConfig.of(options.provider(), deviceId, fallback);
-        }
-        WhisperProviderConfig env = WhisperProviderConfig.fromEnvironment();
-        if (options.deviceId() == null && options.providerFallback() == null) {
-            return env;
-        }
-        int deviceId = options.deviceId() != null ? options.deviceId() : env.deviceId();
-        boolean fallback = options.providerFallback() != null ? options.providerFallback() : env.allowCpuFallback();
-        return WhisperProviderConfig.of(env.requestedProvider(), deviceId, fallback);
+        return WhisperProviderConfig.fromEnvironmentWithOverrides(
+                options.provider(),
+                options.deviceId(),
+                options.providerFallback()
+        );
     }
 
-    private static Path resolveTargetFile(
+    private static boolean matchesAnyInputMedia(Path outputFile, List<AudioJob> jobs) {
+        Path normalizedOutput = outputFile.toAbsolutePath().normalize();
+        boolean outputExists = Files.exists(normalizedOutput);
+        for (AudioJob job : jobs) {
+            Path normalizedInput = job.file().toAbsolutePath().normalize();
+            if (normalizedInput.equals(normalizedOutput)) {
+                return true;
+            }
+            if (outputExists) {
+                try {
+                    if (Files.isSameFile(normalizedInput, normalizedOutput)) {
+                        return true;
+                    }
+                } catch (IOException ignored) {
+                    // Normalized path equality check above still applies.
+                }
+            }
+        }
+        return false;
+    }
+
+    private static Path writeCollisionSafeBatchFile(
+            Path inputFile,
+            Path outputDir,
+            OutputFormat format,
+            String rendered,
+            Set<Path> usedOutputPaths
+    ) throws IOException {
+        while (true) {
+            Path candidate = resolveTargetFile(inputFile, null, outputDir, format, usedOutputPaths);
+            try {
+                Files.writeString(candidate, rendered, StandardCharsets.UTF_8, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+                return candidate;
+            } catch (FileAlreadyExistsException ignored) {
+                // Concurrent creation won the race; advance to the next suffixed candidate.
+            }
+        }
+    }
+
+    static Path resolveTargetFile(
             Path inputFile,
             Path explicitFile,
             Path outputDir,
@@ -283,7 +346,7 @@ public final class JWhisperCli {
         String stem = dot > 0 ? fileName.substring(0, dot) : fileName;
         Path candidate = outputDir.resolve(stem + "." + format.extension()).toAbsolutePath().normalize();
         int suffix = 2;
-        while (!usedOutputPaths.add(candidate)) {
+        while (Files.exists(candidate) || !usedOutputPaths.add(candidate)) {
             candidate = outputDir.resolve(stem + "-" + suffix + "." + format.extension()).toAbsolutePath().normalize();
             suffix++;
         }

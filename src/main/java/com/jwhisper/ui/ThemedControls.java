@@ -99,6 +99,12 @@ final class ThemedControls {
         return undoManager;
     }
 
+    static void clearUndoHistory(JTextComponent textComponent) {
+        if (textComponent != null && textComponent.getClientProperty(UNDO_INSTALLED_KEY) instanceof UndoManager manager) {
+            manager.discardAllEdits();
+        }
+    }
+
     static void styleComboBox(JComboBox<?> combo, UiTheme theme) {
         combo.setOpaque(false);
         combo.setForeground(theme.text());

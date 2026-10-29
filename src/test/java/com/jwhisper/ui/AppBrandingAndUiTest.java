@@ -100,7 +100,12 @@ final class AppBrandingAndUiTest {
                 assertEquals(3, menuBar.getMenuCount());
 
                 window.applyTheme(UiTheme.lightTheme());
+                assertEquals(UiTheme.lightTheme().background(), window.getContentPane().getBackground());
+                assertEquals(UiTheme.lightTheme().surface(), menuBar.getBackground());
+
                 window.applyTheme(UiTheme.darkTheme());
+                assertEquals(UiTheme.darkTheme().background(), window.getContentPane().getBackground());
+                assertEquals(UiTheme.darkTheme().surface(), menuBar.getBackground());
 
                 ModelManagerDialog dialog = new ModelManagerDialog(window, manager, downloads, UiTheme.darkTheme(), () -> {});
                 try {
@@ -108,6 +113,13 @@ final class AppBrandingAndUiTest {
                 } finally {
                     dialog.dispose();
                 }
+
+                PlaceholderTextArea area = new PlaceholderTextArea("Placeholder");
+                var undo = ThemedControls.installUndoSupport(area);
+                area.setText("First view");
+                assertTrue(undo.canUndo());
+                ThemedControls.clearUndoHistory(area);
+                assertFalse(undo.canUndo(), "Programmatic text updates must discard stale undo history");
             } finally {
                 window.dispose();
             }

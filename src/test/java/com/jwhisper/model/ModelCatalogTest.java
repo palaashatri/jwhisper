@@ -2,6 +2,7 @@ package com.jwhisper.model;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -24,8 +25,8 @@ final class ModelCatalogTest {
         assertTrue(ModelCatalog.find("base.en").orElseThrow().isEnglishOnly());
         assertFalse(ModelCatalog.find("base.en").orElseThrow().isMultilingual());
         assertTrue(ModelCatalog.find("large-v3-turbo").orElseThrow().isMultilingual());
-        assertTrue(ModelCatalog.find("tiny.en").orElseThrow().formattedSize().contains("MB"));
-        assertTrue(ModelCatalog.find("large-v3-turbo").orElseThrow().formattedSize().contains("GB"));
+        assertEquals("285 MB", ModelCatalog.find("tiny.en").orElseThrow().formattedSize());
+        assertEquals("4.1 GB", ModelCatalog.find("large-v3-turbo").orElseThrow().formattedSize());
     }
 
     private boolean hasFile(ModelDescriptor descriptor, String path) {

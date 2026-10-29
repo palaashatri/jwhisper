@@ -101,7 +101,7 @@ Download the selected model if missing and write SRT subtitles (format is inferr
 Multilingual transcription, translation to English, beam search, timestamps, and initial prompt:
 
 ```sh
-./gradlew "-PjwhisperRuntime=cpu" cli --args="speech.mp3 --model medium --language fr --translate --beam-size 3 --format vtt --output speech.en.vtt"
+./gradlew "-PjwhisperRuntime=cpu" cli --args="speech.mp3 --model medium --language fr --translate --beam-size 3 --format vtt --output speech.en.vtt --download-model"
 ./gradlew "-PjwhisperRuntime=cpu" cli --args="meeting.m4a --model base.en --prompt \"JWhisper, ONNX Runtime\" --format json --timestamps --output meeting.json"
 ```
 

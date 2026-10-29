@@ -1,16 +1,17 @@
 package com.jwhisper.audio;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.stream.Stream;
 
 public final class AudioInputAgent {
     private static final List<String> ORDERED_EXTENSIONS = List.of(
@@ -76,33 +77,55 @@ public final class AudioInputAgent {
     }
 
     private void collectDirectoryMedia(Path directory, Set<Path> uniqueFiles, List<String> skipped) {
-        try (Stream<Path> walk = Files.walk(directory)) {
-            List<Path> mediaInFolder = walk
-                    .filter(Files::isRegularFile)
-                    .filter(path -> !isHiddenWithin(directory, path))
-                    .filter(path -> SUPPORTED_EXTENSIONS.contains(extension(path)))
-                    .map(path -> path.toAbsolutePath().normalize())
-                    .sorted(Comparator.naturalOrder())
-                    .toList();
-            if (mediaInFolder.isEmpty()) {
+        List<Path> mediaInFolder = new ArrayList<>();
+        int skippedBefore = skipped.size();
+        try {
+            Files.walkFileTree(directory, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                    if (!dir.equals(directory) && isHiddenEntry(dir)) {
+                        return FileVisitResult.SKIP_SUBTREE;
+                    }
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                    if (attrs.isRegularFile()
+                            && !isHiddenEntry(file)
+                            && SUPPORTED_EXTENSIONS.contains(extension(file))) {
+                        mediaInFolder.add(file.toAbsolutePath().normalize());
+                    }
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                    if (file.equals(directory)) {
+                        throw exc;
+                    }
+                    if (isHiddenEntry(file)) {
+                        return FileVisitResult.CONTINUE;
+                    }
+                    Path entryName = file.getFileName();
+                    skipped.add((entryName != null ? entryName : file) + ": Could not read entry.");
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+            mediaInFolder.sort(Comparator.naturalOrder());
+            if (mediaInFolder.isEmpty() && skipped.size() == skippedBefore) {
                 skipped.add(directory.getFileName() + ": No supported audio or video files found in folder.");
             } else {
                 uniqueFiles.addAll(mediaInFolder);
             }
-        } catch (IOException | UncheckedIOException e) {
+        } catch (IOException e) {
             skipped.add(directory.getFileName() + ": Could not read folder.");
         }
     }
 
-    private boolean isHiddenWithin(Path root, Path candidate) {
-        Path relative = root.relativize(candidate);
-        for (Path part : relative) {
-            String name = part.toString();
-            if (name.startsWith(".")) {
-                return true;
-            }
-        }
-        return false;
+    private boolean isHiddenEntry(Path candidate) {
+        Path fileName = candidate.getFileName();
+        return fileName != null && fileName.toString().startsWith(".");
     }
 
     private String extension(Path file) {

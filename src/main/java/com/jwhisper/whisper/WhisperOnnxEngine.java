@@ -894,6 +894,8 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
         }
         try {
             return providerConfig.resolve(OrtEnvironment.getAvailableProviders()).displayName();
+        } catch (WhisperException e) {
+            return providerConfig.requestedProvider().displayName() + " (unavailable)";
         } catch (Throwable ignored) {
             return WhisperExecutionProvider.CPU.displayName();
         }

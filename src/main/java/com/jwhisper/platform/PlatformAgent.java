@@ -2,6 +2,7 @@ package com.jwhisper.platform;
 
 import javax.swing.Icon;
 import javax.swing.JOptionPane;
+import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 import java.awt.Desktop;
 import java.awt.desktop.AboutEvent;
@@ -48,16 +49,18 @@ public final class PlatformAgent {
             desktop.setAboutHandler(new AboutHandler() {
                 @Override
                 public void handleAbout(AboutEvent event) {
-                    String aboutMessage = "JWhisper " + BuildProfile.version() + "\n"
-                            + "Local-first neural speech transcription powered by Whisper ONNX.\n"
-                            + "Runtime profile: " + BuildProfile.runtimeVariant().toUpperCase(Locale.ROOT);
-                    JOptionPane.showMessageDialog(
-                            null,
-                            aboutMessage,
-                            "About JWhisper",
-                            JOptionPane.INFORMATION_MESSAGE,
-                            appIcon
-                    );
+                    runOnEdt(() -> {
+                        String aboutMessage = "JWhisper " + BuildProfile.version() + "\n"
+                                + "Local-first neural speech transcription powered by Whisper ONNX.\n"
+                                + "Runtime profile: " + BuildProfile.runtimeVariant().toUpperCase(Locale.ROOT);
+                        JOptionPane.showMessageDialog(
+                                null,
+                                aboutMessage,
+                                "About JWhisper",
+                                JOptionPane.INFORMATION_MESSAGE,
+                                appIcon
+                        );
+                    });
                 }
             });
         }
@@ -65,28 +68,38 @@ public final class PlatformAgent {
             desktop.setPreferencesHandler(new PreferencesHandler() {
                 @Override
                 public void handlePreferences(PreferencesEvent event) {
-                    if (preferencesAction != null) {
-                        preferencesAction.run();
-                    } else {
-                        JOptionPane.showMessageDialog(
-                                null,
-                                "Manage Whisper models from the main JWhisper window.",
-                                "JWhisper",
-                                JOptionPane.INFORMATION_MESSAGE,
-                                appIcon
-                        );
-                    }
+                    runOnEdt(() -> {
+                        if (preferencesAction != null) {
+                            preferencesAction.run();
+                        } else {
+                            JOptionPane.showMessageDialog(
+                                    null,
+                                    "Manage Whisper models from the main JWhisper window.",
+                                    "JWhisper",
+                                    JOptionPane.INFORMATION_MESSAGE,
+                                    appIcon
+                            );
+                        }
+                    });
                 }
             });
         }
         if (allowQuitSupplier != null && desktop.isSupported(Desktop.Action.APP_QUIT_HANDLER)) {
-            desktop.setQuitHandler((event, response) -> {
+            desktop.setQuitHandler((event, response) -> runOnEdt(() -> {
                 if (allowQuitSupplier.getAsBoolean()) {
                     response.performQuit();
                 } else {
                     response.cancelQuit();
                 }
-            });
+            }));
+        }
+    }
+
+    private static void runOnEdt(Runnable action) {
+        if (SwingUtilities.isEventDispatchThread()) {
+            action.run();
+        } else {
+            SwingUtilities.invokeLater(action);
         }
     }
 

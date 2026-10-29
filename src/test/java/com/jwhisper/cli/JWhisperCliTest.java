@@ -1,9 +1,12 @@
 package com.jwhisper.cli;
 
+import com.jwhisper.deps.DependencyAgent;
 import com.jwhisper.export.OutputFormat;
+import com.jwhisper.platform.PlatformAgent;
 import com.jwhisper.transcribe.TranscriptionOptions;
 import com.jwhisper.transcribe.TranscriptionTask;
 import com.jwhisper.whisper.WhisperExecutionProvider;
+import com.jwhisper.whisper.WhisperProviderConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -12,6 +15,8 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -19,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 final class JWhisperCliTest {
     @TempDir
@@ -78,6 +84,38 @@ final class JWhisperCliTest {
         assertNull(options.provider());
         assertEquals(2, options.deviceId());
         assertEquals(Boolean.FALSE, options.providerFallback());
+
+        WhisperProviderConfig resolved = JWhisperCli.resolveProviderConfig(options);
+        assertEquals(2, resolved.deviceId());
+        assertFalse(resolved.allowCpuFallback());
+    }
+
+    @Test
+    void mergesEnvironmentDeviceIdAndFallbackWhenExplicitProviderOmitsThem() {
+        String prevDevice = System.getProperty("jwhisper.deviceId");
+        String prevFallback = System.getProperty("jwhisper.providerFallback");
+        try {
+            System.setProperty("jwhisper.deviceId", "3");
+            System.setProperty("jwhisper.providerFallback", "true");
+            JWhisperCli.CliOptions options = JWhisperCli.CliOptions.parse(new String[]{
+                    "clip.wav", "--provider", "cuda"
+            });
+            WhisperProviderConfig resolved = JWhisperCli.resolveProviderConfig(options);
+            assertEquals(WhisperExecutionProvider.CUDA, resolved.requestedProvider());
+            assertEquals(3, resolved.deviceId());
+            assertTrue(resolved.allowCpuFallback());
+        } finally {
+            if (prevDevice == null) {
+                System.clearProperty("jwhisper.deviceId");
+            } else {
+                System.setProperty("jwhisper.deviceId", prevDevice);
+            }
+            if (prevFallback == null) {
+                System.clearProperty("jwhisper.providerFallback");
+            } else {
+                System.setProperty("jwhisper.providerFallback", prevFallback);
+            }
+        }
     }
 
     @Test
@@ -142,6 +180,10 @@ final class JWhisperCliTest {
 
     @Test
     void rejectsEnglishOnlyModelWithTranslationBeforeDownloading() throws Exception {
+        assumeTrue(
+                new DependencyAgent(new PlatformAgent()).checkStartupDependencies().canTranscribe(),
+                "Requires transcription dependencies"
+        );
         Path wav = Files.createFile(tempDir.resolve("clip.wav"));
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         ByteArrayOutputStream err = new ByteArrayOutputStream();
@@ -150,12 +192,10 @@ final class JWhisperCliTest {
                 new PrintStream(out, true, StandardCharsets.UTF_8),
                 new PrintStream(err, true, StandardCharsets.UTF_8)
         );
-        assertTrue(code == 8 || code == 3);
-        if (code == 8) {
-            String errText = err.toString(StandardCharsets.UTF_8);
-            assertTrue(errText.contains("English-only"));
-            assertFalse(errText.contains("Downloading"), "Must reject incompatible .en + --translate before downloading");
-        }
+        assertEquals(8, code);
+        String errText = err.toString(StandardCharsets.UTF_8);
+        assertTrue(errText.contains("English-only"));
+        assertFalse(errText.contains("Downloading"), "Must reject incompatible .en + --translate before downloading");
     }
 
     @Test
@@ -214,6 +254,10 @@ final class JWhisperCliTest {
 
     @Test
     void rejectsSingleOutputFileOrStdoutSubtitlesWithMultipleBatchInputs() throws Exception {
+        assumeTrue(
+                new DependencyAgent(new PlatformAgent()).checkStartupDependencies().canTranscribe(),
+                "Requires transcription dependencies"
+        );
         Path a = Files.createFile(tempDir.resolve("a.wav"));
         Path b = Files.createFile(tempDir.resolve("b.wav"));
         Path singleOut = tempDir.resolve("out.txt");
@@ -225,10 +269,8 @@ final class JWhisperCliTest {
                 new PrintStream(out, true, StandardCharsets.UTF_8),
                 new PrintStream(err, true, StandardCharsets.UTF_8)
         );
-        assertTrue(exitCode == 2 || exitCode == 3);
-        if (exitCode == 2) {
-            assertTrue(err.toString(StandardCharsets.UTF_8).contains("--output-dir"));
-        }
+        assertEquals(2, exitCode);
+        assertTrue(err.toString(StandardCharsets.UTF_8).contains("--output-dir"));
 
         ByteArrayOutputStream srtErr = new ByteArrayOutputStream();
         int srtStdoutCode = JWhisperCli.run(
@@ -236,9 +278,41 @@ final class JWhisperCliTest {
                 new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8),
                 new PrintStream(srtErr, true, StandardCharsets.UTF_8)
         );
-        assertTrue(srtStdoutCode == 2 || srtStdoutCode == 3);
-        if (srtStdoutCode == 2) {
-            assertTrue(srtErr.toString(StandardCharsets.UTF_8).contains("--output-dir"));
-        }
+        assertEquals(2, srtStdoutCode);
+        assertTrue(srtErr.toString(StandardCharsets.UTF_8).contains("--output-dir"));
+    }
+
+    @Test
+    void rejectsOutputFileThatOverwritesInputMediaFile() throws Exception {
+        assumeTrue(
+                new DependencyAgent(new PlatformAgent()).checkStartupDependencies().canTranscribe(),
+                "Requires transcription dependencies"
+        );
+        Path media = Files.writeString(tempDir.resolve("clip.wav"), "RIFF-FAKE-AUDIO", StandardCharsets.UTF_8);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int exitCode = JWhisperCli.run(
+                new String[]{media.toString(), "--output", media.toString()},
+                new PrintStream(out, true, StandardCharsets.UTF_8),
+                new PrintStream(err, true, StandardCharsets.UTF_8)
+        );
+        assertEquals(2, exitCode);
+        assertTrue(err.toString(StandardCharsets.UTF_8).contains("--output must not overwrite an input media file"));
+        assertEquals("RIFF-FAKE-AUDIO", Files.readString(media, StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void batchOutputDirectoryTargetAvoidsOverwritingExistingTranscriptsOnDisk() throws Exception {
+        Path outDir = Files.createDirectories(tempDir.resolve("exports"));
+        Path existing = Files.writeString(outDir.resolve("clip.txt"), "existing transcript", StandardCharsets.UTF_8);
+        Set<Path> used = new HashSet<>();
+
+        Path first = JWhisperCli.resolveTargetFile(Path.of("clip.wav"), null, outDir, OutputFormat.TXT, used);
+        Path second = JWhisperCli.resolveTargetFile(Path.of("clip.mp4"), null, outDir, OutputFormat.TXT, used);
+
+        assertEquals(outDir.resolve("clip-2.txt").toAbsolutePath().normalize(), first);
+        assertEquals(outDir.resolve("clip-3.txt").toAbsolutePath().normalize(), second);
+        assertEquals("existing transcript", Files.readString(existing, StandardCharsets.UTF_8));
     }
 }

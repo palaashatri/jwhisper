@@ -47,6 +47,7 @@ import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
 public final class ModelManagerDialog extends JDialog {
@@ -72,6 +73,7 @@ public final class ModelManagerDialog extends JDialog {
     private final JButton closeButton = new JButton("Close");
     private String defaultModelId;
     private boolean statusStickyResult;
+    private boolean deletingModel;
 
     public ModelManagerDialog(
             Frame owner,
@@ -434,18 +436,36 @@ public final class ModelManagerDialog extends JDialog {
         if (choice != JOptionPane.OK_OPTION) {
             return;
         }
-        try {
+        deletingModel = true;
+        updateButtons();
+        setStatus("Removing " + descriptor.displayName() + "...", theme.accent());
+        CompletableFuture.runAsync(() -> {
             beforeDeleteModel.accept(descriptor);
-            modelManagerAgent.deleteModel(descriptor);
+            try {
+                modelManagerAgent.deleteModel(descriptor);
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        }).whenComplete((ignored, throwable) -> SwingUtilities.invokeLater(() -> {
+            deletingModel = false;
+            if (throwable != null) {
+                Throwable cause = throwable.getCause() != null ? throwable.getCause() : throwable;
+                String msg = cause.getMessage() != null && !cause.getMessage().isBlank()
+                        ? cause.getMessage()
+                        : "Could not delete model. Try again.";
+                statusStickyResult = true;
+                setStatus(msg, theme.warning());
+                updateButtons();
+                JOptionPane.showMessageDialog(this, msg, "JWhisper",
+                        JOptionPane.ERROR_MESSAGE, AppIcons.hiDpiIcon(48));
+                return;
+            }
             statusStickyResult = true;
             setStatus("Deleted " + descriptor.displayName() + ".", theme.muted());
             refreshModels();
             selectFirstUninstalledCatalogModel();
             onModelsChanged.run();
-        } catch (Exception e) {
-            JOptionPane.showMessageDialog(this, "Could not delete model. Try again.", "JWhisper",
-                    JOptionPane.ERROR_MESSAGE, AppIcons.hiDpiIcon(48));
-        }
+        }));
     }
 
     private void setDefaultModel() {
@@ -494,8 +514,8 @@ public final class ModelManagerDialog extends JDialog {
         cancelDownloadButton.setVisible(anyDownloading);
         cancelDownloadButton.setEnabled(anyDownloading);
         availableCombo.setEnabled(true);
-        deleteButton.setEnabled(hasSelection);
-        defaultButton.setEnabled(hasSelection && !isAlreadyDefault);
+        deleteButton.setEnabled(hasSelection && !deletingModel);
+        defaultButton.setEnabled(hasSelection && !isAlreadyDefault && !deletingModel);
     }
 
     private void setStatus(String text, Color dotColor) {

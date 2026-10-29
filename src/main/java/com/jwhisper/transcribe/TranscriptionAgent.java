@@ -110,15 +110,37 @@ public final class TranscriptionAgent implements AutoCloseable {
         return whisperEngineAgent.activeProviderDisplayName();
     }
 
+    public CompletableFuture<Void> unloadModelAsync(ModelDescriptor model) {
+        if (model == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        try {
+            executorService.execute(() -> {
+                try {
+                    whisperEngineAgent.unloadModel(model);
+                    future.complete(null);
+                } catch (Throwable e) {
+                    future.completeExceptionally(e);
+                }
+            });
+        } catch (Exception e) {
+            future.completeExceptionally(e);
+        }
+        return future;
+    }
+
     public void unloadModelSync(ModelDescriptor model) {
         if (model == null) {
             return;
         }
         try {
-            executorService.submit(() -> whisperEngineAgent.unloadModel(model))
-                    .get(3, java.util.concurrent.TimeUnit.SECONDS);
-        } catch (Exception ignored) {
-            whisperEngineAgent.unloadModel(model);
+            unloadModelAsync(model).get(5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while unloading model.", e);
+        } catch (Exception e) {
+            throw new IllegalStateException("Model is currently busy loading or transcribing. Try again in a moment.", e);
         }
     }
 

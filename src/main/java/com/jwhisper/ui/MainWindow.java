@@ -66,8 +66,10 @@ import java.awt.event.WindowEvent;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -76,6 +78,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletionException;
 
@@ -178,6 +181,7 @@ public final class MainWindow extends JFrame {
     private final Deque<AudioJob> pendingQueue = new ArrayDeque<>();
     private final List<CompletedItem> completedItems = new ArrayList<>();
     private final Map<OutputFormat, String> combinedBatchEdits = new EnumMap<>(OutputFormat.class);
+    private final Map<OutputFormat, String> combinedSavedBaselines = new EnumMap<>(OutputFormat.class);
     private int activeBatchTotal;
     private int activeBatchIndex;
     private long activeRunGeneration;
@@ -484,8 +488,8 @@ public final class MainWindow extends JFrame {
         if (programmaticTextUpdate || transcribing) {
             return;
         }
-        hasUnsavedManualEdits = !transcriptArea.getText().isBlank();
         if (completedItems.isEmpty() || formatGroup == null) {
+            hasUnsavedManualEdits = !transcriptArea.getText().isBlank();
             return;
         }
         OutputFormat format = formatGroup.selectedValue();
@@ -493,10 +497,44 @@ public final class MainWindow extends JFrame {
         int selectedIndex = viewItem == null ? (completedItems.size() == 1 ? 0 : -1) : viewItem.index();
         String currentText = transcriptArea.getText();
         if (selectedIndex >= 0 && selectedIndex < completedItems.size()) {
-            completedItems.get(selectedIndex).editedByFormat().put(format, currentText);
+            CompletedItem item = completedItems.get(selectedIndex);
+            item.savedBaselineByFormat().computeIfAbsent(format, fmt -> defaultRenderedItem(item, fmt));
+            item.editedByFormat().put(format, currentText);
         } else {
+            combinedSavedBaselines.computeIfAbsent(format, this::defaultRenderedCombined);
             combinedBatchEdits.put(format, currentText);
         }
+        recomputeUnsavedManualEdits();
+    }
+
+    private void recomputeUnsavedManualEdits() {
+        if (completedItems.isEmpty()) {
+            hasUnsavedManualEdits = !transcriptArea.getText().isBlank();
+            return;
+        }
+        for (CompletedItem item : completedItems) {
+            for (Map.Entry<OutputFormat, String> entry : item.editedByFormat().entrySet()) {
+                OutputFormat fmt = entry.getKey();
+                String baseline = item.savedBaselineByFormat().containsKey(fmt)
+                        ? item.savedBaselineByFormat().get(fmt)
+                        : defaultRenderedItem(item, fmt);
+                if (!Objects.equals(entry.getValue(), baseline)) {
+                    hasUnsavedManualEdits = true;
+                    return;
+                }
+            }
+        }
+        for (Map.Entry<OutputFormat, String> entry : combinedBatchEdits.entrySet()) {
+            OutputFormat fmt = entry.getKey();
+            String baseline = combinedSavedBaselines.containsKey(fmt)
+                    ? combinedSavedBaselines.get(fmt)
+                    : defaultRenderedCombined(fmt);
+            if (!Objects.equals(entry.getValue(), baseline)) {
+                hasUnsavedManualEdits = true;
+                return;
+            }
+        }
+        hasUnsavedManualEdits = false;
     }
 
     private void setProgrammaticText(String text) {
@@ -506,6 +544,7 @@ public final class MainWindow extends JFrame {
         } finally {
             programmaticTextUpdate = false;
         }
+        ThemedControls.clearUndoHistory(transcriptArea);
         updateActionButtons();
     }
 
@@ -903,6 +942,9 @@ public final class MainWindow extends JFrame {
             } else {
                 message = "You have unsaved transcript edits. Discard edits and close JWhisper?";
             }
+            if (hasUnsavedManualEdits && (transcribing || downloadsRunning)) {
+                message += "\nUnsaved transcript edits will also be discarded.";
+            }
             int choice = JOptionPane.showConfirmDialog(
                     this,
                     message,
@@ -1208,6 +1250,20 @@ public final class MainWindow extends JFrame {
             return;
         }
 
+        if (hasUnsavedManualEdits) {
+            int choice = JOptionPane.showConfirmDialog(
+                    this,
+                    "You have unsaved transcript edits. Discard edits and transcribe the new file(s)?",
+                    "JWhisper",
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.WARNING_MESSAGE,
+                    AppIcons.hiDpiIcon(48)
+            );
+            if (choice != JOptionPane.OK_OPTION) {
+                return;
+            }
+        }
+
         activeRunGeneration++;
         long runGen = activeRunGeneration;
 
@@ -1215,6 +1271,7 @@ public final class MainWindow extends JFrame {
         pendingQueue.addAll(jobs);
         completedItems.clear();
         combinedBatchEdits.clear();
+        combinedSavedBaselines.clear();
         hasUnsavedManualEdits = false;
         activeBatchTotal = jobs.size();
         activeBatchIndex = 0;
@@ -1293,6 +1350,7 @@ public final class MainWindow extends JFrame {
                             nextJob.file(),
                             result,
                             options.timestamps(),
+                            new EnumMap<>(OutputFormat.class),
                             new EnumMap<>(OutputFormat.class)
                     ));
                     if (!pendingQueue.isEmpty()) {
@@ -1426,31 +1484,42 @@ public final class MainWindow extends JFrame {
             if (edited != null) {
                 rendered = edited;
             } else {
-                boolean includeTimestamps = item.timestampsCaptured()
-                        && (format == OutputFormat.SRT || format == OutputFormat.VTT || timestampsPill.isSelected());
-                rendered = TranscriptionExporter.render(item.result(), format, includeTimestamps).stripTrailing();
+                rendered = defaultRenderedItem(item, format);
+                item.savedBaselineByFormat().put(format, rendered);
             }
         } else {
             String editedCombined = combinedBatchEdits.get(format);
             if (editedCombined != null) {
                 rendered = editedCombined;
             } else {
-                boolean includeTimestamps = completedItems.stream().allMatch(CompletedItem::timestampsCaptured)
-                        && (format == OutputFormat.SRT || format == OutputFormat.VTT || timestampsPill.isSelected());
-                List<TranscriptionExporter.BatchEntry> entries = completedItems.stream()
-                        .map(item -> new TranscriptionExporter.BatchEntry(
-                                item.sourceFile().getFileName().toString(),
-                                item.result()
-                        ))
-                        .toList();
-                rendered = TranscriptionExporter.renderBatch(entries, format, includeTimestamps).stripTrailing();
+                rendered = defaultRenderedCombined(format);
+                combinedSavedBaselines.put(format, rendered);
             }
         }
 
         setProgrammaticText(rendered);
+        recomputeUnsavedManualEdits();
         transcriptArea.setCaretPosition(0);
         warnIfTimedSubtitlesLackTimestamps();
         updateActionButtons();
+    }
+
+    private String defaultRenderedItem(CompletedItem item, OutputFormat format) {
+        boolean includeTimestamps = item.timestampsCaptured()
+                && (format == OutputFormat.SRT || format == OutputFormat.VTT || timestampsPill.isSelected());
+        return TranscriptionExporter.render(item.result(), format, includeTimestamps).stripTrailing();
+    }
+
+    private String defaultRenderedCombined(OutputFormat format) {
+        boolean includeTimestamps = completedItems.stream().allMatch(CompletedItem::timestampsCaptured)
+                && (format == OutputFormat.SRT || format == OutputFormat.VTT || timestampsPill.isSelected());
+        List<TranscriptionExporter.BatchEntry> entries = completedItems.stream()
+                .map(item -> new TranscriptionExporter.BatchEntry(
+                        item.sourceFile().getFileName().toString(),
+                        item.result()
+                ))
+                .toList();
+        return TranscriptionExporter.renderBatch(entries, format, includeTimestamps).stripTrailing();
     }
 
     private void handleTranscriptionError(Throwable throwable) {
@@ -1618,6 +1687,7 @@ public final class MainWindow extends JFrame {
         activeRunGeneration++;
         completedItems.clear();
         combinedBatchEdits.clear();
+        combinedSavedBaselines.clear();
         hasUnsavedManualEdits = false;
         batchSelectorWrap.setVisible(false);
         batchSaveWrap.setVisible(false);
@@ -1666,7 +1736,19 @@ public final class MainWindow extends JFrame {
         try {
             String outputContent = text.endsWith("\n") ? text : text + System.lineSeparator();
             Files.writeString(target, outputContent, StandardCharsets.UTF_8);
-            hasUnsavedManualEdits = false;
+            if (!completedItems.isEmpty()) {
+                BatchViewItem viewItem = (BatchViewItem) batchViewCombo.getSelectedItem();
+                int selectedIndex = viewItem == null ? (completedItems.size() == 1 ? 0 : -1) : viewItem.index();
+                if (selectedIndex >= 0 && selectedIndex < completedItems.size()) {
+                    CompletedItem item = completedItems.get(selectedIndex);
+                    item.savedBaselineByFormat().put(format, text);
+                } else {
+                    combinedSavedBaselines.put(format, text);
+                }
+                recomputeUnsavedManualEdits();
+            } else {
+                hasUnsavedManualEdits = false;
+            }
             setStatus("Saved to " + target.toAbsolutePath().normalize(), StatusTone.SUCCESS);
         } catch (IOException e) {
             JOptionPane.showMessageDialog(this, "Could not save file. Check folder permissions and try again.",
@@ -1704,13 +1786,6 @@ public final class MainWindow extends JFrame {
             Files.createDirectories(dir);
             Set<Path> written = new HashSet<>();
             for (CompletedItem item : completedItems) {
-                String stem = fileStem(item.sourceFile());
-                Path candidate = dir.resolve(stem + "." + format.extension()).toAbsolutePath().normalize();
-                int suffix = 2;
-                while (Files.exists(candidate) || !written.add(candidate)) {
-                    candidate = dir.resolve(stem + "-" + suffix + "." + format.extension()).toAbsolutePath().normalize();
-                    suffix++;
-                }
                 String edited = item.editedByFormat().get(format);
                 String rendered;
                 if (edited != null) {
@@ -1720,9 +1795,33 @@ public final class MainWindow extends JFrame {
                             && (format == OutputFormat.SRT || format == OutputFormat.VTT || timestampsPill.isSelected());
                     rendered = TranscriptionExporter.render(item.result(), format, includeTimestamps);
                 }
-                Files.writeString(candidate, rendered, StandardCharsets.UTF_8);
+                String stem = fileStem(item.sourceFile());
+                Path candidate = dir.resolve(stem + "." + format.extension()).toAbsolutePath().normalize();
+                int suffix = 2;
+                while (true) {
+                    while (Files.exists(candidate) || !written.add(candidate)) {
+                        candidate = dir.resolve(stem + "-" + suffix + "." + format.extension()).toAbsolutePath().normalize();
+                        suffix++;
+                    }
+                    try {
+                        Files.writeString(
+                                candidate,
+                                rendered,
+                                StandardCharsets.UTF_8,
+                                StandardOpenOption.CREATE_NEW,
+                                StandardOpenOption.WRITE
+                        );
+                        break;
+                    } catch (FileAlreadyExistsException ignored) {
+                        candidate = dir.resolve(stem + "-" + suffix + "." + format.extension()).toAbsolutePath().normalize();
+                        suffix++;
+                    }
+                }
+                if (edited != null) {
+                    item.savedBaselineByFormat().put(format, edited);
+                }
             }
-            hasUnsavedManualEdits = false;
+            recomputeUnsavedManualEdits();
             setStatus("Saved " + written.size() + " ." + format.extension() + " files to " + dir.toAbsolutePath().normalize(),
                     StatusTone.SUCCESS);
         } catch (IOException e) {
@@ -1785,6 +1884,24 @@ public final class MainWindow extends JFrame {
             return "CPU · LOCAL ONNX";
         }
         String lower = providerName.trim().toLowerCase(Locale.ROOT);
+        if (lower.contains("unavailable")) {
+            if (lower.contains("coreml")) {
+                return "COREML UNAVAILABLE";
+            }
+            if (lower.contains("cuda")) {
+                return "CUDA UNAVAILABLE";
+            }
+            if (lower.contains("tensorrt")) {
+                return "TENSORRT UNAVAILABLE";
+            }
+            if (lower.contains("rocm")) {
+                return "ROCM UNAVAILABLE";
+            }
+            if (lower.contains("gpu")) {
+                return "GPU UNAVAILABLE";
+            }
+            return "PROVIDER UNAVAILABLE";
+        }
         if (lower.contains("coreml")) {
             return "COREML · LOCAL ONNX";
         }
@@ -1880,7 +1997,8 @@ public final class MainWindow extends JFrame {
             Path sourceFile,
             TranscriptionResult result,
             boolean timestampsCaptured,
-            Map<OutputFormat, String> editedByFormat
+            Map<OutputFormat, String> editedByFormat,
+            Map<OutputFormat, String> savedBaselineByFormat
     ) {
     }
 
