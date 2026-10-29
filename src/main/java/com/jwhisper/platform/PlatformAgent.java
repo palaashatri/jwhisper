@@ -1,22 +1,26 @@
 package com.jwhisper.platform;
 
+import javax.swing.Icon;
 import javax.swing.JOptionPane;
+import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 import java.awt.Desktop;
 import java.awt.desktop.AboutEvent;
 import java.awt.desktop.AboutHandler;
 import java.awt.desktop.PreferencesEvent;
 import java.awt.desktop.PreferencesHandler;
+import java.util.function.BooleanSupplier;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Locale;
 
 public final class PlatformAgent {
     public static void prepareMacProperties() {
         System.setProperty("apple.laf.useScreenMenuBar", "true");
-        System.setProperty("com.apple.mrj.application.apple.menu.about.name", "jwhisper");
-        System.setProperty("apple.awt.application.name", "jwhisper");
+        System.setProperty("com.apple.mrj.application.apple.menu.about.name", "JWhisper");
+        System.setProperty("apple.awt.application.name", "JWhisper");
         System.setProperty("apple.awt.application.appearance", "system");
     }
 
@@ -29,6 +33,14 @@ public final class PlatformAgent {
     }
 
     public void installMacMenuHandlers() {
+        installMacMenuHandlers(null, null, null);
+    }
+
+    public void installMacMenuHandlers(Icon appIcon, Runnable preferencesAction) {
+        installMacMenuHandlers(appIcon, preferencesAction, null);
+    }
+
+    public void installMacMenuHandlers(Icon appIcon, Runnable preferencesAction, BooleanSupplier allowQuitSupplier) {
         if (!Desktop.isDesktopSupported()) {
             return;
         }
@@ -37,12 +49,18 @@ public final class PlatformAgent {
             desktop.setAboutHandler(new AboutHandler() {
                 @Override
                 public void handleAbout(AboutEvent event) {
-                    JOptionPane.showMessageDialog(
-                            null,
-                            "jwhisper transcribes audio locally with Whisper ONNX.",
-                            "About jwhisper",
-                            JOptionPane.INFORMATION_MESSAGE
-                    );
+                    runOnEdt(() -> {
+                        String aboutMessage = "JWhisper " + BuildProfile.version() + "\n"
+                                + "Local-first neural speech transcription powered by Whisper ONNX.\n"
+                                + "Runtime profile: " + BuildProfile.runtimeVariant().toUpperCase(Locale.ROOT);
+                        JOptionPane.showMessageDialog(
+                                null,
+                                aboutMessage,
+                                "About JWhisper",
+                                JOptionPane.INFORMATION_MESSAGE,
+                                appIcon
+                        );
+                    });
                 }
             });
         }
@@ -50,14 +68,38 @@ public final class PlatformAgent {
             desktop.setPreferencesHandler(new PreferencesHandler() {
                 @Override
                 public void handlePreferences(PreferencesEvent event) {
-                    JOptionPane.showMessageDialog(
-                            null,
-                            "No preferences yet.",
-                            "jwhisper",
-                            JOptionPane.INFORMATION_MESSAGE
-                    );
+                    runOnEdt(() -> {
+                        if (preferencesAction != null) {
+                            preferencesAction.run();
+                        } else {
+                            JOptionPane.showMessageDialog(
+                                    null,
+                                    "Manage Whisper models from the main JWhisper window.",
+                                    "JWhisper",
+                                    JOptionPane.INFORMATION_MESSAGE,
+                                    appIcon
+                            );
+                        }
+                    });
                 }
             });
+        }
+        if (allowQuitSupplier != null && desktop.isSupported(Desktop.Action.APP_QUIT_HANDLER)) {
+            desktop.setQuitHandler((event, response) -> runOnEdt(() -> {
+                if (allowQuitSupplier.getAsBoolean()) {
+                    response.performQuit();
+                } else {
+                    response.cancelQuit();
+                }
+            }));
+        }
+    }
+
+    private static void runOnEdt(Runnable action) {
+        if (SwingUtilities.isEventDispatchThread()) {
+            action.run();
+        } else {
+            SwingUtilities.invokeLater(action);
         }
     }
 
@@ -74,7 +116,7 @@ public final class PlatformAgent {
     }
 
     public String ffmpegInstallHint() {
-        String os = System.getProperty("os.name", "").toLowerCase();
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         if (os.contains("mac")) {
             return "Install it with: brew install ffmpeg";
         }

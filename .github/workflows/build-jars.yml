@@ -33,16 +33,18 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ matrix.java }}
-          cache: gradle
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build and test CPU runtime
-        run: gradle -PjwhisperRuntime=cpu clean test fatJar
+        run: ./gradlew "-PjwhisperRuntime=cpu" clean test fatJar
 
       - name: Verify CLI launches
-        run: gradle -PjwhisperRuntime=cpu cli --args="--help"
+        run: ./gradlew "-PjwhisperRuntime=cpu" cli --args="--help"
+
+      - name: Verify CLI diagnostics
+        run: ./gradlew "-PjwhisperRuntime=cpu" cli --args="--diagnostics"
 
       - name: Upload CPU jar
         if: matrix.java == '17'
@@ -54,6 +56,9 @@ jobs:
   reference-transcription:
     name: Reference transcription / tiny.en / JFK
     runs-on: ubuntu-latest
+    env:
+      JFK_COMMIT: 6e3be77e1a105e59086e3e21ff5f609fd6fa89a5
+      JFK_SHA256: 63a4b1e4c1dc655ac70961ffbf518acd249df237e5a0152faae9a4a836949715
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -63,7 +68,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -71,13 +75,20 @@ jobs:
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - name: Download OpenAI Whisper reference fixture
-        run: curl --fail --location --retry 3 --output build-jfk.flac https://raw.githubusercontent.com/openai/whisper/main/tests/jfk.flac
+      - name: Download and verify pinned OpenAI Whisper reference fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output build-jfk.flac \
+            "https://raw.githubusercontent.com/openai/whisper/${JFK_COMMIT}/tests/jfk.flac"
+          echo "${JFK_SHA256}  build-jfk.flac" | sha256sum --check
 
-      - name: Transcribe reference fixture
-        run: gradle -PjwhisperRuntime=cpu cli --args="build-jfk.flac --model tiny.en --download-model --output build-jfk.txt --quiet"
+      - name: Transcribe reference fixture (TXT and SRT)
+        run: |
+          ./gradlew "-PjwhisperRuntime=cpu" cli --args="build-jfk.flac --model tiny.en --download-model --output build-jfk.txt --quiet"
+          ./gradlew "-PjwhisperRuntime=cpu" cli --args="build-jfk.flac --model tiny.en --format srt --output build-jfk.srt --quiet"
 
-      - name: Validate reference phrases
+      - name: Validate reference phrases and SRT cues
         shell: bash
         run: |
           set -euo pipefail
@@ -85,13 +96,20 @@ jobs:
           grep -Fq "my fellow americans" <<<"$normalized"
           grep -Fq "your country" <<<"$normalized"
           grep -Fq "do for you" <<<"$normalized"
+          grep -Eq '^1$' build-jfk.srt
+          grep -Eq '^[0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3} --> [0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3}$' build-jfk.srt
+          srt_normalized="$(tr '[:upper:]' '[:lower:]' < build-jfk.srt)"
+          grep -Fq "my fellow americans" <<<"$srt_normalized"
+          grep -Fq "your country" <<<"$srt_normalized"
           cat build-jfk.txt
 
       - name: Upload reference transcript
         uses: actions/upload-artifact@v4
         with:
           name: jwhisper-reference-jfk-transcript
-          path: build-jfk.txt
+          path: |
+            build-jfk.txt
+            build-jfk.srt
 
   apple-silicon:
     name: Apple Silicon CoreML jar
@@ -105,13 +123,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build Apple Silicon jar
-        run: gradle -PjwhisperRuntime=apple clean test fatJar
+        run: ./gradlew "-PjwhisperRuntime=apple" clean test fatJar
 
       - name: Upload Apple Silicon jar
         uses: actions/upload-artifact@v4
@@ -131,13 +148,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build GPU jar
-        run: gradle -PjwhisperRuntime=gpu clean test fatJar
+        run: ./gradlew "-PjwhisperRuntime=gpu" clean test fatJar
 
       - name: Upload GPU jar
         uses: actions/upload-artifact@v4

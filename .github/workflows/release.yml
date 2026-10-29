@@ -41,13 +41,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
       - name: Test and build app image
-        run: gradle -PjwhisperRuntime=${{ matrix.runtime }} clean test packageAppImage
+        run: ./gradlew "-PjwhisperRuntime=${{ matrix.runtime }}" clean test packageAppImage
 
       - name: Archive package
         run: python scripts/archive-package.py build/package build/distributions/jwhisper-0.1.0-${{ matrix.label }}.zip

@@ -12,37 +12,68 @@ public final class WhisperProviderConfig {
     private final boolean allowCpuFallback;
 
     private WhisperProviderConfig(WhisperExecutionProvider requestedProvider, int deviceId, boolean allowCpuFallback) {
-        this.requestedProvider = requestedProvider;
-        this.deviceId = deviceId;
+        this.requestedProvider = requestedProvider == null ? WhisperExecutionProvider.AUTO : requestedProvider;
+        this.deviceId = Math.max(0, deviceId);
         this.allowCpuFallback = allowCpuFallback;
     }
 
+    public static WhisperProviderConfig of(
+            WhisperExecutionProvider requestedProvider,
+            int deviceId,
+            boolean allowCpuFallback
+    ) {
+        return new WhisperProviderConfig(requestedProvider, deviceId, allowCpuFallback);
+    }
+
     public static WhisperProviderConfig fromEnvironment() {
+        return fromEnvironmentWithOverrides(null, null, null);
+    }
+
+    public static WhisperProviderConfig fromEnvironmentWithOverrides(
+            WhisperExecutionProvider providerOverride,
+            Integer deviceIdOverride,
+            Boolean fallbackOverride
+    ) {
+        int envDeviceId = parseDeviceId(firstNonBlank(
+                System.getProperty("jwhisper.deviceId"),
+                System.getenv("JWHISPER_DEVICE_ID")
+        ));
+        int resolvedDeviceId = deviceIdOverride != null ? deviceIdOverride : envDeviceId;
+
+        String envFallbackRaw = firstNonBlank(
+                System.getProperty("jwhisper.providerFallback"),
+                System.getenv("JWHISPER_PROVIDER_FALLBACK")
+        );
+
+        if (providerOverride != null) {
+            boolean fallback = fallbackOverride != null
+                    ? fallbackOverride
+                    : (envFallbackRaw != null && Boolean.parseBoolean(envFallbackRaw));
+            return new WhisperProviderConfig(providerOverride, resolvedDeviceId, fallback);
+        }
+
         String explicitProvider = firstNonBlank(
                 System.getProperty("jwhisper.provider"),
                 System.getenv("JWHISPER_PROVIDER")
         );
-        int deviceId = parseDeviceId(firstNonBlank(
-                System.getProperty("jwhisper.deviceId"),
-                System.getenv("JWHISPER_DEVICE_ID")
-        ));
         if (explicitProvider != null) {
-            boolean fallback = Boolean.parseBoolean(firstNonBlank(
-                    System.getProperty("jwhisper.providerFallback"),
-                    System.getenv("JWHISPER_PROVIDER_FALLBACK"),
-                    "false"
-            ));
-            return new WhisperProviderConfig(WhisperExecutionProvider.from(explicitProvider), deviceId, fallback);
+            boolean fallback = fallbackOverride != null
+                    ? fallbackOverride
+                    : (envFallbackRaw != null && Boolean.parseBoolean(envFallbackRaw));
+            return new WhisperProviderConfig(WhisperExecutionProvider.from(explicitProvider), resolvedDeviceId, fallback);
         }
 
+        boolean autoFallback = fallbackOverride != null
+                ? fallbackOverride
+                : (envFallbackRaw == null || Boolean.parseBoolean(envFallbackRaw));
         String variant = BuildProfile.runtimeVariant();
         if ("apple".equals(variant)) {
-            return new WhisperProviderConfig(WhisperExecutionProvider.COREML, deviceId, true);
+            return new WhisperProviderConfig(WhisperExecutionProvider.COREML, resolvedDeviceId, autoFallback);
         }
         if ("gpu".equals(variant)) {
-            return new WhisperProviderConfig(WhisperExecutionProvider.GPU, deviceId, true);
+            return new WhisperProviderConfig(WhisperExecutionProvider.GPU, resolvedDeviceId, autoFallback);
         }
-        return new WhisperProviderConfig(WhisperExecutionProvider.AUTO, deviceId, true);
+        return new WhisperProviderConfig(WhisperExecutionProvider.AUTO, resolvedDeviceId, autoFallback);
     }
 
     public int deviceId() {

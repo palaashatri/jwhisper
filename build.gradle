@@ -30,22 +30,43 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:6.1.0'
 }
 
+def defaultJvmArgs = [
+        '-Dapple.laf.useScreenMenuBar=true',
+        '-Dcom.apple.mrj.application.apple.menu.about.name=JWhisper',
+        '-Dapple.awt.application.name=JWhisper',
+        "-Djwhisper.runtimeVariant=${runtimeVariant}"
+]
+if (JavaVersion.current().majorVersion.toInteger() >= 22) {
+    defaultJvmArgs.add('--enable-native-access=ALL-UNNAMED')
+}
+
 application {
     mainClass = 'com.jwhisper.JWhisperApp'
-    applicationDefaultJvmArgs = [
-            '-Dapple.laf.useScreenMenuBar=true',
-            '-Dcom.apple.mrj.application.apple.menu.about.name=jwhisper',
-            "-Djwhisper.runtimeVariant=${runtimeVariant}"
-    ]
+    applicationDefaultJvmArgs = defaultJvmArgs
+}
+
+tasks.named('run', JavaExec) {
+    def osName = System.getProperty('os.name', '').toLowerCase(Locale.ROOT)
+    if (osName.contains('mac')) {
+        jvmArgs('-Xdock:name=JWhisper')
+        def macIcon = file('assets/brand/icon.icns')
+        if (macIcon.isFile()) {
+            jvmArgs("-Xdock:icon=${macIcon.absolutePath}")
+        }
+    }
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.release = 17
+    options.compilerArgs.add('-Xlint:deprecation')
 }
 
 tasks.named('test') {
     useJUnitPlatform()
+    if (JavaVersion.current().majorVersion.toInteger() >= 22) {
+        jvmArgs('--enable-native-access=ALL-UNNAMED')
+    }
 }
 
 tasks.named('processResources') {
@@ -65,10 +86,11 @@ tasks.named('jar') {
     manifest {
         attributes(
                 'Main-Class': application.mainClass.get(),
-                'Implementation-Title': 'jwhisper',
+                'Implementation-Title': 'JWhisper',
                 'Implementation-Version': projectVersion,
                 'Jwhisper-Runtime-Variant': runtimeVariant,
-                'Jwhisper-OnnxRuntime-Artifact': onnxRuntimeArtifact
+                'Jwhisper-OnnxRuntime-Artifact': onnxRuntimeArtifact,
+                'Enable-Native-Access': 'ALL-UNNAMED'
         )
     }
 }
@@ -82,10 +104,11 @@ tasks.register('fatJar', Jar) {
     manifest {
         attributes(
                 'Main-Class': application.mainClass.get(),
-                'Implementation-Title': 'jwhisper',
+                'Implementation-Title': 'JWhisper',
                 'Implementation-Version': projectVersion,
                 'Jwhisper-Runtime-Variant': runtimeVariant,
-                'Jwhisper-OnnxRuntime-Artifact': onnxRuntimeArtifact
+                'Jwhisper-OnnxRuntime-Artifact': onnxRuntimeArtifact,
+                'Enable-Native-Access': 'ALL-UNNAMED'
         )
     }
     exclude('META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA')
@@ -102,6 +125,9 @@ tasks.register('cli', JavaExec) {
     description = 'Runs the headless JWhisper CLI. Pass arguments with --args.'
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'com.jwhisper.cli.JWhisperCli'
+    if (JavaVersion.current().majorVersion.toInteger() >= 22) {
+        jvmArgs('--enable-native-access=ALL-UNNAMED')
+    }
 }
 
 tasks.register('printRuntimeClasspath') {
@@ -118,25 +144,62 @@ tasks.register('packageAppImage', Exec) {
     description = 'Builds a self-contained desktop app image with jpackage.'
     dependsOn tasks.named('fatJar')
     doFirst {
-        def windows = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('win')
+        def osName = System.getProperty('os.name', '').toLowerCase(Locale.ROOT)
+        def windows = osName.contains('win')
+        def mac = osName.contains('mac')
         def jpackage = new File(System.getProperty('java.home'), 'bin/' + (windows ? 'jpackage.exe' : 'jpackage'))
         if (!jpackage.isFile()) {
             throw new GradleException("jpackage was not found in the selected JDK: ${jpackage}")
         }
+        def iconFile = mac
+                ? file('assets/brand/icon.icns')
+                : (windows ? file('assets/brand/icon.ico') : file('assets/brand/icon-512.png'))
+        if (!iconFile.isFile()) {
+            throw new GradleException("Application icon file is missing: ${iconFile}")
+        }
         def destination = layout.buildDirectory.dir('package').get().asFile
         delete destination
         destination.mkdirs()
-        commandLine(
+
+        def stagingInput = layout.buildDirectory.dir('tmp/jpackage-input').get().asFile
+        delete stagingInput
+        stagingInput.mkdirs()
+        def fatJarFile = tasks.named('fatJar').get().archiveFile.get().asFile
+        copy {
+            from fatJarFile
+            into stagingInput
+        }
+
+        def versionTokens = projectVersion.replaceAll('[^0-9.]', '').tokenize('.').findAll { !it.isEmpty() }
+        while (versionTokens.size() < 3) {
+            versionTokens.add('0')
+        }
+        def versionInts = versionTokens.take(3).collect { it.toInteger() }
+        // macOS jpackage requires CFBundleShortVersionString major integer >= 1
+        def jpackageVersion = (mac && versionInts[0] <= 0) ? '1.0.0' : versionInts.join('.')
+
+        def cmd = [
                 jpackage.absolutePath,
                 '--type', 'app-image',
                 '--name', 'JWhisper',
+                '--vendor', 'JWhisper',
+                '--icon', iconFile.absolutePath,
                 '--dest', destination.absolutePath,
-                '--input', layout.buildDirectory.dir('libs').get().asFile.absolutePath,
-                '--main-jar', tasks.named('fatJar').get().archiveFileName.get(),
+                '--input', stagingInput.absolutePath,
+                '--main-jar', fatJarFile.name,
                 '--main-class', application.mainClass.get(),
-                '--app-version', projectVersion,
+                '--app-version', jpackageVersion,
                 '--description', 'Local-first Whisper transcription for the JVM',
+                '--java-options', '-Dapple.laf.useScreenMenuBar=true',
+                '--java-options', '-Dapple.awt.application.name=JWhisper',
                 '--java-options', "-Djwhisper.runtimeVariant=${runtimeVariant}"
-        )
+        ]
+        if (JavaVersion.current().majorVersion.toInteger() >= 22) {
+            cmd.addAll(['--java-options', '--enable-native-access=ALL-UNNAMED'])
+        }
+        if (mac) {
+            cmd.addAll(['--mac-package-name', 'JWhisper'])
+        }
+        commandLine(cmd)
     }
 }

@@ -10,7 +10,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -52,9 +51,7 @@ public final class WhisperTokenizer {
         ObjectMapper mapper = new ObjectMapper();
         JsonNode tokenizer = mapper.readTree(tokenizerJson.toFile());
         Map<Integer, String> idToToken = new LinkedHashMap<>();
-        Iterator<Map.Entry<String, JsonNode>> fields = tokenizer.path("model").path("vocab").fields();
-        while (fields.hasNext()) {
-            Map.Entry<String, JsonNode> field = fields.next();
+        for (Map.Entry<String, JsonNode> field : tokenizer.path("model").path("vocab").properties()) {
             idToToken.put(field.getValue().asInt(), field.getKey());
         }
 
@@ -85,9 +82,7 @@ public final class WhisperTokenizer {
         Set<Integer> specialTokenIds = new HashSet<>();
         if (tokenizerConfigJson != null && tokenizerConfigJson.toFile().isFile()) {
             JsonNode config = mapper.readTree(tokenizerConfigJson.toFile());
-            Iterator<Map.Entry<String, JsonNode>> specialFields = config.path("added_tokens_decoder").fields();
-            while (specialFields.hasNext()) {
-                Map.Entry<String, JsonNode> field = specialFields.next();
+            for (Map.Entry<String, JsonNode> field : config.path("added_tokens_decoder").properties()) {
                 if (field.getValue().path("special").asBoolean(false)) {
                     specialTokenIds.add(Integer.parseInt(field.getKey()));
                 }
