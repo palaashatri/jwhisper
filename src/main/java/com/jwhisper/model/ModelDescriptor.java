@@ -1,6 +1,7 @@
 package com.jwhisper.model;
 
 import java.util.List;
+import java.util.Locale;
 
 public record ModelDescriptor(
         String id,
@@ -37,6 +38,27 @@ public record ModelDescriptor(
         this(id, displayName, repository, revision, description, estimatedBytes, files,
                 "Whisper encoder-decoder", "FP32 ONNX", "MIT (upstream Whisper)",
                 repository + "@" + revision, "ONNX Runtime 1.26+");
+    }
+
+    public boolean isEnglishOnly() {
+        return id != null && id.toLowerCase(Locale.ROOT).endsWith(".en");
+    }
+
+    public boolean isMultilingual() {
+        return !isEnglishOnly();
+    }
+
+    public String formattedSize() {
+        if (estimatedBytes >= 1_000_000_000L) {
+            return String.format(Locale.ROOT, "%.1f GB", estimatedBytes / 1_000_000_000.0);
+        }
+        if (estimatedBytes >= 1_000_000L) {
+            return String.format(Locale.ROOT, "%d MB", Math.round(estimatedBytes / 1_000_000.0));
+        }
+        if (estimatedBytes > 0) {
+            return String.format(Locale.ROOT, "%d KB", Math.max(1L, Math.round(estimatedBytes / 1_000.0)));
+        }
+        return "size unknown";
     }
 
     @Override

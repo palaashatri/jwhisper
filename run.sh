@@ -17,30 +17,36 @@ if ! command -v java >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v gradle >/dev/null 2>&1; then
-  echo "Gradle is required. Install it with: brew install gradle"
+if [[ -x "./gradlew" ]]; then
+  GRADLE_CMD="./gradlew"
+elif command -v gradle >/dev/null 2>&1; then
+  GRADLE_CMD="gradle"
+else
+  echo "Gradle is required. Ensure ./gradlew is executable or install Gradle."
   exit 1
 fi
 
 case "${1:-run}" in
   run)
-    gradle -PjwhisperRuntime="$runtime" build
-    gradle -PjwhisperRuntime="$runtime" run
+    "$GRADLE_CMD" "-PjwhisperRuntime=$runtime" run
     ;;
   build)
-    gradle -PjwhisperRuntime="$runtime" build
+    "$GRADLE_CMD" "-PjwhisperRuntime=$runtime" build
     ;;
   test)
-    gradle -PjwhisperRuntime="$runtime" test
+    "$GRADLE_CMD" "-PjwhisperRuntime=$runtime" test
     ;;
   jar)
-    gradle -PjwhisperRuntime="$runtime" clean fatJar
+    "$GRADLE_CMD" "-PjwhisperRuntime=$runtime" clean fatJar
+    ;;
+  package)
+    "$GRADLE_CMD" "-PjwhisperRuntime=$runtime" packageAppImage
     ;;
   clean)
-    gradle -PjwhisperRuntime="$runtime" clean build
+    "$GRADLE_CMD" "-PjwhisperRuntime=$runtime" clean build
     ;;
   *)
-    echo "Usage: ./run.sh [run|build|test|jar|clean]"
+    echo "Usage: ./run.sh [run|build|test|jar|package|clean]"
     echo "Set JWHISPER_RUNTIME=cpu, apple, or gpu to choose the ONNX Runtime build."
     exit 1
     ;;

@@ -13,6 +13,7 @@ import com.jwhisper.transcribe.TranscriptionListener;
 import com.jwhisper.transcribe.TranscriptionOptions;
 import com.jwhisper.transcribe.TranscriptionResult;
 import com.jwhisper.transcribe.TranscriptionSegment;
+import com.jwhisper.transcribe.TranscriptionTask;
 import com.jwhisper.transcribe.TranscriptionTimings;
 
 import java.io.ByteArrayOutputStream;
@@ -58,10 +59,10 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
         this(WhisperProviderConfig.fromEnvironment());
     }
 
-    WhisperOnnxEngine(WhisperProviderConfig providerConfig) {
+    public WhisperOnnxEngine(WhisperProviderConfig providerConfig) {
         this.environment = OrtEnvironment.getEnvironment();
         this.audioDecoder = new FfmpegAudioDecoder();
-        this.providerConfig = providerConfig;
+        this.providerConfig = providerConfig == null ? WhisperProviderConfig.fromEnvironment() : providerConfig;
     }
 
     @Override
@@ -138,6 +139,15 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
                 listener.onStatus("Detecting language...");
                 language = detectLanguage(samples, runOptions, timing);
             } else if (!generationConfig.isMultilingual()) {
+                if (requested.task() == TranscriptionTask.TRANSLATE) {
+                    throw new WhisperException("Model " + job.model().id()
+                            + " is English-only and does not support translation. Use a multilingual model.");
+                }
+                if (language != null && !"en".equalsIgnoreCase(language) && !"english".equalsIgnoreCase(language)) {
+                    throw new WhisperException("Model " + job.model().id()
+                            + " is English-only and cannot transcribe language '" + language
+                            + "'. Use a multilingual model.");
+                }
                 language = "en";
             }
 

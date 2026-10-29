@@ -4,21 +4,23 @@ JWhisper is a local-first Whisper speech-to-text runtime for the JVM (Java 17+, 
 
 What "production-ready" means, and the evidence recorded so far, is in [`docs/READINESS.md`](docs/READINESS.md). This file tells agents how to work in the repository.
 
-## Current state (2026-10-20)
+## Current state (2026-10-29)
 
 - PR #1 is merged: FFT preprocessing, KV-cache decoding, beam search, temperature fallback, timestamp-based long-form seeking, pinned and SHA-256-verified models, a headless CLI, and CI on Linux/macOS/Windows with an end-to-end JFK transcription gate.
-- CLI now accepts `--language`, `--task` (transcribe|translate), and `--beam-size` and passes them via TranscriptionOptions. Desktop UI wiring remains a follow-up.
-- No Gradle wrapper is checked in; the CI reference audio is fetched from `openai/whisper` `main` (unpinned).
+- Both the CLI (`JWhisperCli`) and Swing desktop UI (`MainWindow`) expose `TranscriptionOptions` (`--language`, `--task` / `--translate`, `--beam-size`, `--timestamps` / `--no-timestamps`, `--prompt`), `OutputFormat` (`TXT`, `JSON`, `SRT`, `VTT`), single-file and batch multi-file/folder transcription, provider overrides, and `--diagnostics` / `--list-models`.
+- Brand icons (`assets/brand/` and classpath `com/jwhisper/icons/icon-{16..512}.png`) are wired across Swing windows, OS taskbar/dock (`java.awt.Taskbar` and macOS `-Xdock:icon`), About dialog, and `jpackage` (`packageAppImage` `.icns`/`.ico`/`icon-512.png`).
+- Gradle 9.8.2 wrapper (`./gradlew` / `gradlew.bat`) is checked in with a pinned SHA-256, and the CI reference audio (`openai/whisper` `tests/jfk.flac`) is pinned to commit `6e3be77e1a105e59086e3e21ff5f609fd6fa89a5` and SHA-256 verified.
 
 ## Commands
 
-Requirements: JDK 17+, Gradle (no wrapper is checked in yet), `ffmpeg` on `PATH`.
+Requirements: JDK 17+, `ffmpeg` on `PATH` (Gradle wrapper `./gradlew` is checked in).
 
 ```bash
-gradle -PjwhisperRuntime=cpu clean test fatJar          # what CI runs on Linux/macOS/Windows (JDK 17 and 25)
-gradle -PjwhisperRuntime=cpu cli --args="--help"
-gradle -PjwhisperRuntime=cpu cli --args="clip.flac --model tiny.en --download-model --output out.txt"
-./run.sh [run|build|test|jar|clean]                      # picks the apple runtime on Apple Silicon, cpu elsewhere
+./gradlew "-PjwhisperRuntime=cpu" clean test fatJar      # what CI runs on Linux/macOS/Windows (JDK 17 and 25)
+./gradlew "-PjwhisperRuntime=cpu" cli --args="--help"
+./gradlew "-PjwhisperRuntime=cpu" cli --args="clip.flac --model tiny.en --download-model --output out.srt"
+./gradlew "-PjwhisperRuntime=cpu" packageAppImage        # builds self-contained app image in build/package/
+./run.sh [run|build|test|jar|package|clean]              # picks the apple runtime on Apple Silicon, cpu elsewhere
 ```
 
 `-PjwhisperRuntime` selects the ONNX Runtime artifact: `cpu` (default), `apple` (CoreML-oriented build), `gpu` (`onnxruntime_gpu`, CUDA). Artifacts go to `build/libs/`.
@@ -63,7 +65,7 @@ End-to-end check (the CI reference gate): transcribe OpenAI's `tests/jfk.flac` w
 ## Git workflow and done
 
 - Branch and open a PR unless the owner explicitly asks for a direct push to `main`.
-- Before pushing: `gradle -PjwhisperRuntime=cpu clean test fatJar` passes and, for engine changes, the JFK end-to-end transcription still matches.
+- Before pushing: `./gradlew "-PjwhisperRuntime=cpu" clean test fatJar` passes and, for engine changes, the JFK end-to-end transcription still matches.
 - New decoding or preprocessing behaviour comes with tests against reference values; new export formats with golden-file tests.
 
 ## Future SLOPOS/PARAMA integration and Pi Zero 2 W efficiency goals

@@ -12,9 +12,13 @@ RIP_URL="https://archive.org/download/rip-a-remix-manifesto-8040182/RIP%20%EF%BC
 run_cli() {
   local input="$1"
   local output="$2"
-  (cd "${ROOT_DIR}" && gradle -q classes)
+  local gradle_cmd="./gradlew"
+  if [[ ! -x "${ROOT_DIR}/gradlew" ]]; then
+    gradle_cmd="gradle"
+  fi
+  (cd "${ROOT_DIR}" && "${gradle_cmd}" -q classes)
   local cp
-  cp="$(cd "${ROOT_DIR}" && gradle -q printRuntimeClasspath)"
+  cp="$(cd "${ROOT_DIR}" && "${gradle_cmd}" -q printRuntimeClasspath)"
   java -cp "${cp}" com.jwhisper.cli.JWhisperCli \
     "${input}" \
     --model "${MODEL}" \

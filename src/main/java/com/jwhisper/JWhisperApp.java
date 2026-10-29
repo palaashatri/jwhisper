@@ -7,6 +7,7 @@ import com.jwhisper.model.ModelDownloadService;
 import com.jwhisper.model.ModelManagerAgent;
 import com.jwhisper.platform.PlatformAgent;
 import com.jwhisper.transcribe.TranscriptionAgent;
+import com.jwhisper.ui.AppIcons;
 import com.jwhisper.ui.MainWindow;
 import com.jwhisper.ui.UiTheme;
 import com.jwhisper.whisper.UnavailableWhisperEngine;
@@ -21,12 +22,13 @@ public final class JWhisperApp {
 
     public static void main(String[] args) {
         PlatformAgent.prepareMacProperties();
+        AppIcons.installTaskbarIcon();
         SwingUtilities.invokeLater(() -> {
             PlatformAgent platformAgent = new PlatformAgent();
             platformAgent.useSystemLookAndFeel();
+            AppIcons.installTaskbarIcon();
             UiTheme theme = UiTheme.current();
             theme.applyGlobalDefaults();
-            platformAgent.installMacMenuHandlers();
 
             DependencyAgent dependencyAgent = new DependencyAgent(platformAgent);
             DependencyReport dependencyReport = dependencyAgent.checkStartupDependencies();
@@ -46,6 +48,7 @@ public final class JWhisperApp {
                     transcriptionAgent,
                     dependencyReport
             );
+            platformAgent.installMacMenuHandlers(AppIcons.hiDpiIcon(64), window::openModelManagerDialog);
             window.setVisible(true);
             window.showStartupMessages();
         });

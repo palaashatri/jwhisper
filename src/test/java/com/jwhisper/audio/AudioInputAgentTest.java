@@ -54,4 +54,23 @@ final class AudioInputAgentTest {
         assertEquals(first.toAbsolutePath().normalize(), result.job().orElseThrow().file());
         assertEquals("Using the first file.", result.job().orElseThrow().note());
     }
+
+    @Test
+    void collectsBatchMediaFromFilesAndNestedFoldersSkippingHiddenAndUnsupported() throws Exception {
+        Path folder = Files.createDirectories(tempDir.resolve("batch"));
+        Path clipB = Files.createFile(folder.resolve("02-interview.mp4"));
+        Path clipA = Files.createFile(folder.resolve("01-intro.flac"));
+        Files.createFile(folder.resolve("notes.md"));
+        Path hiddenDir = Files.createDirectories(folder.resolve(".hidden"));
+        Files.createFile(hiddenDir.resolve("secret.wav"));
+
+        AudioInputAgent.BatchSelection batch = new AudioInputAgent().collectMedia(List.of(folder, clipA));
+
+        assertTrue(batch.hasJobs());
+        assertEquals(
+                List.of(clipA.toAbsolutePath().normalize(), clipB.toAbsolutePath().normalize()),
+                batch.jobs().stream().map(AudioJob::file).toList()
+        );
+        assertTrue(batch.skipped().isEmpty());
+    }
 }

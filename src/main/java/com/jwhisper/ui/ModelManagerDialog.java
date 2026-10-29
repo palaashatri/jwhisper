@@ -11,6 +11,7 @@ import javax.swing.Box;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.DefaultListModel;
+import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JDialog;
@@ -18,10 +19,11 @@ import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.ListSelectionModel;
+import javax.swing.ScrollPaneConstants;
 import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -42,7 +44,7 @@ public final class ModelManagerDialog extends JDialog {
     private final DefaultListModel<ModelDescriptor> installedListModel = new DefaultListModel<>();
     private final JList<ModelDescriptor> installedList = new JList<>(installedListModel);
     private final JComboBox<ModelDescriptor> availableCombo = new JComboBox<>();
-    private final JProgressBar progressBar = new JProgressBar(0, 100);
+    private final ThemedControls.AmethystProgressBar progressBar;
     private final JLabel statusLabel = new JLabel("Ready.");
     private final JButton downloadButton = new JButton("Download model");
     private final JButton deleteButton = new JButton("Delete");
@@ -57,64 +59,102 @@ public final class ModelManagerDialog extends JDialog {
             UiTheme theme,
             Runnable onModelsChanged
     ) {
-        super(owner, "Manage models", true);
+        super(owner, "Whisper Models — JWhisper", true);
         this.modelManagerAgent = modelManagerAgent;
         this.downloadService = downloadService;
         this.theme = theme;
         this.onModelsChanged = onModelsChanged;
-        this.downloadListener = state -> javax.swing.SwingUtilities.invokeLater(() -> {
+        this.progressBar = new ThemedControls.AmethystProgressBar(theme);
+        this.downloadListener = state -> SwingUtilities.invokeLater(() -> {
             updateDownloadProgress();
             refreshModels();
             this.onModelsChanged.run();
         });
+        AppIcons.applyToWindow(this);
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         setContentPane(buildContent());
         refreshModels();
         pack();
-        setMinimumSize(new Dimension(620, 420));
+        setMinimumSize(new Dimension(700, 450));
+        setSize(new Dimension(730, 475));
         setLocationRelativeTo(owner);
         downloadService.addListener(downloadListener);
     }
 
     private JPanel buildContent() {
-        JPanel root = new JPanel(new BorderLayout(16, 16));
+        JPanel root = new JPanel(new BorderLayout(14, 14));
         root.setBackground(theme.background());
-        root.setBorder(BorderFactory.createEmptyBorder(20, 22, 18, 22));
+        root.setBorder(BorderFactory.createEmptyBorder(18, 22, 18, 22));
 
-        JLabel title = new JLabel("Models");
+        JPanel header = new JPanel(new BorderLayout(12, 0));
+        header.setOpaque(false);
+        ImageIcon icon = AppIcons.hiDpiIcon(32);
+        if (icon != null) {
+            header.add(new JLabel(icon), BorderLayout.WEST);
+        }
+        JPanel titleStack = new JPanel(new BorderLayout(0, 2));
+        titleStack.setOpaque(false);
+        JLabel title = new JLabel("Whisper Model Store");
         title.setForeground(theme.text());
-        title.setFont(title.getFont().deriveFont(Font.PLAIN, 19f));
-        root.add(title, BorderLayout.NORTH);
+        title.setFont(title.getFont().deriveFont(Font.BOLD, 17f));
+        JLabel subtitle = new JLabel("Revision-pinned, SHA-256 verified local ONNX models (~/.jwhisper/models)");
+        subtitle.setForeground(theme.muted());
+        subtitle.setFont(subtitle.getFont().deriveFont(Font.PLAIN, 12f));
+        titleStack.add(title, BorderLayout.NORTH);
+        titleStack.add(subtitle, BorderLayout.SOUTH);
+        header.add(titleStack, BorderLayout.CENTER);
+        root.add(header, BorderLayout.NORTH);
+
+        ThemedControls.CardPanel card = new ThemedControls.CardPanel(theme, 14);
+        card.setLayout(new GridBagLayout());
+        card.setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));
 
         installedList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        installedList.setCellRenderer(new ModelRenderer());
+        installedList.setCellRenderer(new ModelRenderer(true));
         installedList.setForeground(theme.text());
         installedList.setBackground(theme.field());
-        installedList.setFixedCellHeight(30);
+        installedList.setFixedCellHeight(36);
         installedList.addListSelectionListener(event -> updateButtons());
+
         JScrollPane scrollPane = new JScrollPane(installedList);
-        scrollPane.setPreferredSize(new Dimension(520, 180));
-        scrollPane.setBorder(BorderFactory.createLineBorder(theme.fieldBorder()));
-        scrollPane.getViewport().setBackground(theme.field());
+        scrollPane.setPreferredSize(new Dimension(560, 195));
+        scrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        ThemedControls.styleScrollPane(scrollPane, theme);
 
         DefaultComboBoxModel<ModelDescriptor> availableModel = new DefaultComboBoxModel<>();
         modelManagerAgent.availableModels().forEach(availableModel::addElement);
         availableCombo.setModel(availableModel);
-        availableCombo.setRenderer(new ModelRenderer());
-        availableCombo.setForeground(theme.text());
-        availableCombo.setBackground(theme.field());
-        availableCombo.setFont(availableCombo.getFont().deriveFont(Font.PLAIN, 14f));
+        availableCombo.setRenderer(new ModelRenderer(false));
+        availableCombo.setPreferredSize(new Dimension(380, 34));
+        ThemedControls.styleComboBox(availableCombo, theme);
         availableCombo.addActionListener(event -> updateButtons());
 
-        JPanel center = new JPanel(new GridBagLayout());
-        center.setOpaque(false);
         GridBagConstraints constraints = new GridBagConstraints();
         constraints.gridx = 0;
         constraints.gridy = 0;
         constraints.weightx = 1;
+        constraints.weighty = 0;
+        constraints.anchor = GridBagConstraints.WEST;
+        constraints.insets = new Insets(0, 0, 6, 0);
+        JLabel installedLabel = new JLabel("Installed models");
+        installedLabel.setForeground(theme.muted());
+        installedLabel.setFont(installedLabel.getFont().deriveFont(Font.BOLD, 12f));
+        card.add(installedLabel, constraints);
+
+        constraints.gridy = 1;
         constraints.weighty = 1;
         constraints.fill = GridBagConstraints.BOTH;
-        center.add(scrollPane, constraints);
+        constraints.insets = new Insets(0, 0, 14, 0);
+        card.add(scrollPane, constraints);
+
+        constraints.gridy = 2;
+        constraints.weighty = 0;
+        constraints.fill = GridBagConstraints.NONE;
+        constraints.insets = new Insets(0, 0, 6, 0);
+        JLabel catalogLabel = new JLabel("Download from catalog");
+        catalogLabel.setForeground(theme.muted());
+        catalogLabel.setFont(catalogLabel.getFont().deriveFont(Font.BOLD, 12f));
+        card.add(catalogLabel, constraints);
 
         JPanel downloadRow = new JPanel(new GridBagLayout());
         downloadRow.setOpaque(false);
@@ -123,41 +163,45 @@ public final class ModelManagerDialog extends JDialog {
         comboConstraints.gridy = 0;
         comboConstraints.weightx = 1;
         comboConstraints.fill = GridBagConstraints.HORIZONTAL;
-        comboConstraints.insets = new Insets(0, 0, 0, 8);
+        comboConstraints.insets = new Insets(0, 0, 0, 10);
         downloadRow.add(availableCombo, comboConstraints);
+
         comboConstraints.gridx = 1;
         comboConstraints.weightx = 0;
         comboConstraints.insets = new Insets(0, 0, 0, 0);
+        downloadButton.setPreferredSize(new Dimension(150, 34));
         downloadRow.add(downloadButton, comboConstraints);
 
-        constraints.gridy = 1;
-        constraints.weighty = 0;
-        constraints.insets = new Insets(16, 0, 0, 0);
-        center.add(downloadRow, constraints);
-        root.add(center, BorderLayout.CENTER);
+        constraints.gridy = 3;
+        constraints.fill = GridBagConstraints.HORIZONTAL;
+        constraints.insets = new Insets(0, 0, 0, 0);
+        card.add(downloadRow, constraints);
+        root.add(card, BorderLayout.CENTER);
 
-        progressBar.setStringPainted(false);
         progressBar.setVisible(false);
-        JPanel actions = new JPanel(new BorderLayout(12, 12));
+        JPanel actions = new JPanel(new BorderLayout(10, 10));
         actions.setOpaque(false);
-        JPanel progressRow = new JPanel(new BorderLayout(12, 0));
+        JPanel progressRow = new JPanel(new BorderLayout(0, 6));
         progressRow.setOpaque(false);
         statusLabel.setHorizontalAlignment(SwingConstants.LEFT);
         statusLabel.setForeground(theme.muted());
-        statusLabel.setFont(statusLabel.getFont().deriveFont(Font.PLAIN, 13f));
-        progressRow.add(statusLabel, BorderLayout.CENTER);
+        statusLabel.setFont(statusLabel.getFont().deriveFont(Font.PLAIN, 12.5f));
+        progressRow.add(statusLabel, BorderLayout.NORTH);
         progressRow.add(progressBar, BorderLayout.SOUTH);
         actions.add(progressRow, BorderLayout.CENTER);
 
         JPanel buttonRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         buttonRow.setOpaque(false);
+        defaultButton.setPreferredSize(new Dimension(112, 32));
+        deleteButton.setPreferredSize(new Dimension(92, 32));
+        closeButton.setPreferredSize(new Dimension(92, 32));
         theme.styleButton(defaultButton, UiTheme.ButtonRole.NORMAL);
         theme.styleButton(deleteButton, UiTheme.ButtonRole.DANGER);
         theme.styleButton(closeButton, UiTheme.ButtonRole.NORMAL);
         theme.styleButton(downloadButton, UiTheme.ButtonRole.PRIMARY);
         buttonRow.add(defaultButton);
         buttonRow.add(deleteButton);
-        buttonRow.add(Box.createHorizontalStrut(10));
+        buttonRow.add(Box.createHorizontalStrut(8));
         buttonRow.add(closeButton);
         actions.add(buttonRow, BorderLayout.SOUTH);
         root.add(actions, BorderLayout.SOUTH);
@@ -215,9 +259,10 @@ public final class ModelManagerDialog extends JDialog {
         int choice = JOptionPane.showConfirmDialog(
                 this,
                 "Delete " + descriptor.displayName() + "?",
-                "jwhisper",
+                "JWhisper",
                 JOptionPane.OK_CANCEL_OPTION,
-                JOptionPane.WARNING_MESSAGE
+                JOptionPane.WARNING_MESSAGE,
+                AppIcons.hiDpiIcon(48)
         );
         if (choice != JOptionPane.OK_OPTION) {
             return;
@@ -226,9 +271,9 @@ public final class ModelManagerDialog extends JDialog {
             modelManagerAgent.deleteModel(descriptor);
             refreshModels();
             onModelsChanged.run();
-            statusLabel.setText("Model deleted.");
+            statusLabel.setText("Deleted " + descriptor.displayName() + ".");
         } catch (Exception e) {
-            JOptionPane.showMessageDialog(this, "Something went wrong. Try again.", "jwhisper", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, "Could not delete model. Try again.", "JWhisper", JOptionPane.ERROR_MESSAGE);
         }
     }
 
@@ -241,9 +286,9 @@ public final class ModelManagerDialog extends JDialog {
             modelManagerAgent.setDefaultModel(descriptor);
             refreshModels();
             onModelsChanged.run();
-            statusLabel.setText("Default model set.");
+            statusLabel.setText("Default model set to " + descriptor.displayName() + ".");
         } catch (Exception e) {
-            JOptionPane.showMessageDialog(this, "Something went wrong. Try again.", "jwhisper", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, "Could not update default model. Try again.", "JWhisper", JOptionPane.ERROR_MESSAGE);
         }
     }
 
@@ -259,7 +304,7 @@ public final class ModelManagerDialog extends JDialog {
         ModelDownloadState state = active.get(0);
         progressBar.setVisible(true);
         progressBar.setValue(state.percent());
-        statusLabel.setText(state.message());
+        statusLabel.setText(state.descriptor().displayName() + " (" + state.percent() + "%) — " + state.message());
     }
 
     private void updateButtons() {
@@ -280,6 +325,12 @@ public final class ModelManagerDialog extends JDialog {
     }
 
     private final class ModelRenderer extends DefaultListCellRenderer {
+        private final boolean installedView;
+
+        private ModelRenderer(boolean installedView) {
+            this.installedView = installedView;
+        }
+
         @Override
         public Component getListCellRendererComponent(
                 JList<?> list,
@@ -290,12 +341,21 @@ public final class ModelManagerDialog extends JDialog {
         ) {
             JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
             if (value instanceof ModelDescriptor descriptor) {
-                String suffix = descriptor.id().equals(defaultModelId) ? "  (default)" : "";
-                suffix += downloadService.stateFor(descriptor)
+                String scope = descriptor.isMultilingual() ? "Multilingual" : "English";
+                StringBuilder badge = new StringBuilder();
+                if (descriptor.id().equals(defaultModelId)) {
+                    badge.append(" [default]");
+                } else if (!installedView && modelManagerAgent.isInstalled(descriptor)) {
+                    badge.append(" [installed]");
+                }
+                badge.append(downloadService.stateFor(descriptor)
                         .filter(ModelDownloadState::isActive)
-                        .map(state -> "  (downloading " + state.percent() + "%)")
-                        .orElse("");
-                label.setText(descriptor.displayName() + suffix + " - " + descriptor.description());
+                        .map(state -> " [downloading " + state.percent() + "%]")
+                        .orElse(""));
+                String fullText = descriptor.displayName() + badge + "  ·  " + scope
+                        + " (" + descriptor.formattedSize() + ") — " + descriptor.description();
+                label.setText(fullText);
+                label.setToolTipText(fullText + "  [" + descriptor.provenance() + "]");
             }
             if (!isSelected) {
                 label.setForeground(theme.text());
@@ -304,7 +364,7 @@ public final class ModelManagerDialog extends JDialog {
                 label.setForeground(theme.accentText());
                 label.setBackground(theme.accent());
             }
-            label.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+            label.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
             return label;
         }
     }

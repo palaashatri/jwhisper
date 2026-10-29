@@ -182,10 +182,10 @@ public final class WhisperGenerationConfig {
     private static Map<String, Integer> tokenMap(JsonNode node, boolean language) {
         Map<String, Integer> values = new LinkedHashMap<>();
         if (node == null || !node.isObject()) return values;
-        node.fields().forEachRemaining(entry -> {
+        for (Map.Entry<String, JsonNode> entry : node.properties()) {
             String key = language ? normalizeLanguage(entry.getKey()) : entry.getKey();
             values.put(key, entry.getValue().asInt());
-        });
+        }
         return values;
     }
 

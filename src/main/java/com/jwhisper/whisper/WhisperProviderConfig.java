@@ -12,9 +12,17 @@ public final class WhisperProviderConfig {
     private final boolean allowCpuFallback;
 
     private WhisperProviderConfig(WhisperExecutionProvider requestedProvider, int deviceId, boolean allowCpuFallback) {
-        this.requestedProvider = requestedProvider;
-        this.deviceId = deviceId;
+        this.requestedProvider = requestedProvider == null ? WhisperExecutionProvider.AUTO : requestedProvider;
+        this.deviceId = Math.max(0, deviceId);
         this.allowCpuFallback = allowCpuFallback;
+    }
+
+    public static WhisperProviderConfig of(
+            WhisperExecutionProvider requestedProvider,
+            int deviceId,
+            boolean allowCpuFallback
+    ) {
+        return new WhisperProviderConfig(requestedProvider, deviceId, allowCpuFallback);
     }
 
     public static WhisperProviderConfig fromEnvironment() {
