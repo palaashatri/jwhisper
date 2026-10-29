@@ -1,0 +1,13 @@
+{
+  "name": "JWhisper",
+  "category": "Local transcription runtime",
+  "background": [
+    "#34465c",
+    "#1b2c3e"
+  ],
+  "accent": "#9ebbd8",
+  "highlight": "#e6edf6",
+  "typography": "Inter, Segoe UI, Arial",
+  "style": "muted-metal / enamel / soft-depth",
+  "license": "original project artwork"
+}

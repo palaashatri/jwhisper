@@ -1,5 +1,10 @@
 # JWhisper
 
+<img src="assets/brand/app-icon.svg" alt="JWhisper icon" width="96" align="right" />
+
+[Icon, wordmark, and brand assets](assets/brand/README.md)
+
+
 JWhisper is a Java 17+ local Whisper transcription project built on ONNX Runtime. It currently ships a simple Swing desktop application and a headless CLI, with the inference/core code being hardened into a reusable JVM transcription runtime.
 
 <img width="1056" height="772" alt="JWhisper desktop application" src="https://github.com/user-attachments/assets/5ac0c99d-9440-4214-933b-324dca408659" />
