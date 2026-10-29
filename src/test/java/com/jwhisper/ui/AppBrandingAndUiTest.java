@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.swing.ImageIcon;
+import javax.swing.JMenuBar;
 import javax.swing.SwingUtilities;
 import java.awt.Color;
 import java.awt.GraphicsEnvironment;
@@ -53,23 +54,33 @@ final class AppBrandingAndUiTest {
     }
 
     @Test
-    void brandThemesAlignWithLogoPaletteAndMaintainAccessibleContrast() {
+    void supportsDocumentedAudioAndVideoExtensionsIncludingOpus() {
+        List<String> extensions = AudioInputAgent.supportedExtensionList();
+        assertTrue(extensions.containsAll(List.of("wav", "mp3", "m4a", "flac", "ogg", "opus", "aac", "mp4", "mkv", "mov", "webm")));
+    }
+
+    @Test
+    void brandThemesAlignWithLogoPaletteAndPassWcagAaContrastIncludingPlaceholders() {
         UiTheme dark = UiTheme.darkTheme();
         assertTrue(dark.dark());
         // Exact brand tokens from assets/brand/palette.json (#A16CF6 accent, #F4F7FC foreground)
         assertEquals(new Color(0xA1, 0x6C, 0xF6), dark.accent());
         assertEquals(new Color(0xF4, 0xF7, 0xFC), dark.text());
         assertTrue(contrastRatio(dark.text(), dark.surface()) > 10.0);
+        assertTrue(contrastRatio(dark.muted(), dark.surface()) >= 4.5, "Dark muted text must pass WCAG AA");
+        assertTrue(contrastRatio(dark.subtle(), dark.field()) >= 4.5, "Dark placeholder text must pass WCAG AA");
 
         UiTheme light = UiTheme.lightTheme();
         assertFalse(light.dark());
         assertTrue(light.accent().getBlue() > light.accent().getRed());
         assertTrue(light.accent().getRed() > light.accent().getGreen());
         assertTrue(contrastRatio(light.text(), light.surface()) > 10.0);
+        assertTrue(contrastRatio(light.muted(), light.surface()) >= 4.5, "Light muted text must pass WCAG AA");
+        assertTrue(contrastRatio(light.subtle(), light.field()) >= 4.5, "Light placeholder text must pass WCAG AA");
     }
 
     @Test
-    void attachesBrandIconsToDesktopWindowsWhenDisplayAvailable() throws Exception {
+    void attachesBrandIconsMenuBarAndNonCollapsingMinimumBoundsToWindows() throws Exception {
         if (GraphicsEnvironment.isHeadless()) {
             return;
         }
@@ -83,6 +94,11 @@ final class AppBrandingAndUiTest {
             MainWindow window = new MainWindow(manager, downloads, new AudioInputAgent(), agent, report);
             try {
                 assertEquals(8, window.getIconImages().size(), "MainWindow must never fall back to the default Java icon");
+                assertTrue(window.getMinimumSize().width >= 920, "MainWindow minimum width must accommodate all options without clipping");
+                JMenuBar menuBar = window.getJMenuBar();
+                assertNotNull(menuBar, "MainWindow must expose a keyboard-accessible JMenuBar");
+                assertEquals(3, menuBar.getMenuCount());
+
                 window.applyTheme(UiTheme.lightTheme());
                 window.applyTheme(UiTheme.darkTheme());
 

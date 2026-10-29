@@ -26,9 +26,10 @@ import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 
 public final class ModelManagerAgent {
-    private static final int DOWNLOAD_BUFFER_BYTES = 1024 * 1024;
+    private static final int DOWNLOAD_BUFFER_BYTES = 64 * 1024;
     private static final long DOWNLOAD_SAFETY_BYTES = 512L * 1024L * 1024L;
 
     private final Path modelsDirectory;
@@ -115,6 +116,15 @@ public final class ModelManagerAgent {
 
     public void downloadModel(ModelDescriptor descriptor, DownloadProgressListener listener)
             throws IOException, InterruptedException {
+        downloadModel(descriptor, listener, () -> false);
+    }
+
+    public void downloadModel(
+            ModelDescriptor descriptor,
+            DownloadProgressListener listener,
+            BooleanSupplier canceled
+    ) throws IOException, InterruptedException {
+        BooleanSupplier cancelCheck = canceled == null ? () -> false : canceled;
         Files.createDirectories(modelsDirectory);
         long bytesNeeded = descriptor.estimatedBytes() + DOWNLOAD_SAFETY_BYTES;
         if (!dependencyAgent.hasDiskSpace(bytesNeeded)) {
@@ -130,9 +140,15 @@ public final class ModelManagerAgent {
         DownloadCounter counter = new DownloadCounter(total);
 
         for (ModelFile file : descriptor.files()) {
-            downloadFile(descriptor, file, root.resolve(file.relativePath()), counter, listener);
+            if (cancelCheck.getAsBoolean() || Thread.currentThread().isInterrupted()) {
+                throw new InterruptedException("Download canceled.");
+            }
+            downloadFile(descriptor, file, root.resolve(file.relativePath()), counter, listener, cancelCheck);
         }
 
+        if (cancelCheck.getAsBoolean() || Thread.currentThread().isInterrupted()) {
+            throw new InterruptedException("Download canceled.");
+        }
         listener.onProgress(0.96, "Checking model...");
         validateLoadable(descriptor);
 
@@ -154,9 +170,20 @@ public final class ModelManagerAgent {
             ModelFile file,
             Path target,
             DownloadCounter counter,
-            DownloadProgressListener listener
+            DownloadProgressListener listener,
+            BooleanSupplier canceled
     ) throws IOException, InterruptedException {
         Files.createDirectories(target.getParent());
+        if (Files.isRegularFile(target)) {
+            long targetSize = Files.size(target);
+            boolean sizeMatches = file.expectedBytes() > 0 && targetSize == file.expectedBytes();
+            boolean hashMatches = !file.hasSha256() || sha256(target).equalsIgnoreCase(file.sha256());
+            if (sizeMatches && hashMatches) {
+                counter.add(targetSize);
+                listener.onProgress(counter.fraction(), "Verified " + target.getFileName());
+                return;
+            }
+        }
         Path temp = target.resolveSibling(target.getFileName() + ".download");
         long existingBytes = Files.isRegularFile(temp) ? Files.size(temp) : 0L;
 
@@ -192,6 +219,9 @@ public final class ModelManagerAgent {
             byte[] buffer = new byte[DOWNLOAD_BUFFER_BYTES];
             int read;
             while ((read = input.read(buffer)) != -1) {
+                if (canceled.getAsBoolean() || Thread.currentThread().isInterrupted()) {
+                    throw new InterruptedException("Download canceled.");
+                }
                 output.write(buffer, 0, read);
                 fileBytes += read;
                 counter.add(read);

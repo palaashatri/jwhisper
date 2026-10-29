@@ -4,5 +4,6 @@ public enum ModelDownloadStatus {
     PENDING,
     RUNNING,
     SUCCEEDED,
-    FAILED
+    FAILED,
+    CANCELED
 }

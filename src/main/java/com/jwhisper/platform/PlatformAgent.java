@@ -8,6 +8,7 @@ import java.awt.desktop.AboutEvent;
 import java.awt.desktop.AboutHandler;
 import java.awt.desktop.PreferencesEvent;
 import java.awt.desktop.PreferencesHandler;
+import java.util.function.BooleanSupplier;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,10 +32,14 @@ public final class PlatformAgent {
     }
 
     public void installMacMenuHandlers() {
-        installMacMenuHandlers(null, null);
+        installMacMenuHandlers(null, null, null);
     }
 
     public void installMacMenuHandlers(Icon appIcon, Runnable preferencesAction) {
+        installMacMenuHandlers(appIcon, preferencesAction, null);
+    }
+
+    public void installMacMenuHandlers(Icon appIcon, Runnable preferencesAction, BooleanSupplier allowQuitSupplier) {
         if (!Desktop.isDesktopSupported()) {
             return;
         }
@@ -71,6 +76,15 @@ public final class PlatformAgent {
                                 appIcon
                         );
                     }
+                }
+            });
+        }
+        if (allowQuitSupplier != null && desktop.isSupported(Desktop.Action.APP_QUIT_HANDLER)) {
+            desktop.setQuitHandler((event, response) -> {
+                if (allowQuitSupplier.getAsBoolean()) {
+                    response.performQuit();
+                } else {
+                    response.cancelQuit();
                 }
             });
         }

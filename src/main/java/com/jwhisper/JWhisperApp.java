@@ -48,7 +48,11 @@ public final class JWhisperApp {
                     transcriptionAgent,
                     dependencyReport
             );
-            platformAgent.installMacMenuHandlers(AppIcons.hiDpiIcon(64), window::openModelManagerDialog);
+            platformAgent.installMacMenuHandlers(
+                    AppIcons.hiDpiIcon(64),
+                    window::openModelManagerDialog,
+                    window::confirmQuitRequested
+            );
             window.setVisible(true);
             window.showStartupMessages();
         });

@@ -1,3 +1,0 @@
-# JWhisper application icon
-
-Original dimensional purple waveform identity (`palette.json`), with transparent PNG source crop, 16–1024px PNG exports, ICO, ICNS, wordmark and social preview. Multi-resolution icons (`icon-16.png` through `icon-512.png`) are bundled into classpath resources under `com/jwhisper/icons/` for cross-platform window/taskbar/dock branding, and `icon.icns`, `icon.ico`, and `icon-512.png` are wired into `jpackage` (`packageAppImage`) and macOS `-Xdock:icon`. Large 512px and 1024px exports are resampled from a roughly 248px crop of a generated icon sheet rather than independently generated high-resolution masters.

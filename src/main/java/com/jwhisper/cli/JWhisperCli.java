@@ -100,9 +100,7 @@ public final class JWhisperCli {
         } else {
             AudioInputAgent.BatchSelection batch = audioAgent.collectMedia(options.inputs());
             for (String skipped : batch.skipped()) {
-                if (!options.quiet()) {
-                    err.println("Skipping " + skipped);
-                }
+                err.println("Skipping " + skipped);
             }
             if (!batch.hasJobs()) {
                 err.println(batch.skipped().isEmpty()
@@ -113,6 +111,7 @@ public final class JWhisperCli {
             jobs = batch.jobs();
         }
 
+        OutputFormat format = options.resolvedFormat();
         Path effectiveOutputDir = options.outputDir();
         Path effectiveOutputFile = options.output();
         if (jobs.size() > 1 && effectiveOutputFile != null) {
@@ -124,11 +123,38 @@ public final class JWhisperCli {
                 return 2;
             }
         }
+        if (jobs.size() > 1 && effectiveOutputDir == null && (format == OutputFormat.SRT || format == OutputFormat.VTT)) {
+            err.println("Use --output-dir <directory> when exporting multiple files as " + format.name() + ".");
+            return 2;
+        }
 
         ModelDescriptor model = ModelCatalog.find(options.modelId()).orElse(null);
         if (model == null) {
             err.println("Unknown model: " + options.modelId());
             return 5;
+        }
+
+        TranscriptionOptions transcriptionOptions = buildTranscriptionOptions(options);
+        if (model.isEnglishOnly()) {
+            if (transcriptionOptions.task() == TranscriptionTask.TRANSLATE) {
+                err.println("Transcription failed: Model " + model.id()
+                        + " is English-only and does not support translation. Use a multilingual model.");
+                return 8;
+            }
+            String requestedLang = transcriptionOptions.language();
+            if (requestedLang != null && !"en".equalsIgnoreCase(requestedLang) && !"english".equalsIgnoreCase(requestedLang)) {
+                err.println("Transcription failed: Model " + model.id()
+                        + " is English-only and cannot transcribe language '" + requestedLang + "'. Use a multilingual model.");
+                return 8;
+            }
+        }
+
+        WhisperProviderConfig providerConfig;
+        try {
+            providerConfig = resolveProviderConfig(options);
+        } catch (IllegalArgumentException e) {
+            err.println(firstMessage(e));
+            return 2;
         }
 
         if (!modelManager.isInstalled(model)) {
@@ -143,7 +169,7 @@ public final class JWhisperCli {
                 modelManager.downloadModel(model, (fraction, message) -> {
                     if (!options.quiet()) {
                         int percent = (int) Math.round(fraction * 100.0);
-                        err.printf("\r[%3d%%] %s", percent, message);
+                        err.printf("\r[%3d%%] %-56s", percent, message);
                     }
                 });
                 if (!options.quiet()) {
@@ -155,16 +181,14 @@ public final class JWhisperCli {
             }
         }
 
-        WhisperProviderConfig providerConfig = resolveProviderConfig(options);
-        TranscriptionOptions transcriptionOptions = buildTranscriptionOptions(options);
-        OutputFormat format = options.resolvedFormat();
-
         try (TranscriptionAgent transcription = new TranscriptionAgent(
                 modelManager,
                 dependencyReport,
                 new WhisperOnnxEngine(providerConfig)
         )) {
             Set<Path> usedOutputPaths = new HashSet<>();
+            List<TranscriptionExporter.BatchEntry> stdoutEntries = new ArrayList<>();
+            boolean includeTimestamps = transcriptionOptions.timestamps();
             for (int index = 0; index < jobs.size(); index++) {
                 AudioJob job = jobs.get(index);
                 if (jobs.size() > 1 && !options.quiet()) {
@@ -178,9 +202,9 @@ public final class JWhisperCli {
                         new ConsoleListener(options.quiet(), err)
                 ).join();
 
-                String rendered = TranscriptionExporter.render(result, format);
                 Path target = resolveTargetFile(job.file(), effectiveOutputFile, effectiveOutputDir, format, usedOutputPaths);
                 if (target != null) {
+                    String rendered = TranscriptionExporter.render(result, format, includeTimestamps);
                     Path normalizedTarget = target.toAbsolutePath().normalize();
                     Path parent = normalizedTarget.getParent();
                     if (parent != null) {
@@ -191,13 +215,16 @@ public final class JWhisperCli {
                         err.println("Transcript written to " + normalizedTarget);
                     }
                 } else {
-                    if (jobs.size() > 1) {
-                        out.println("=== " + job.file().getFileName() + " ===");
-                    }
-                    out.print(rendered);
-                    if (!rendered.endsWith("\n")) {
-                        out.println();
-                    }
+                    stdoutEntries.add(new TranscriptionExporter.BatchEntry(job.file().getFileName().toString(), result));
+                }
+            }
+            if (!stdoutEntries.isEmpty()) {
+                String rendered = stdoutEntries.size() == 1
+                        ? TranscriptionExporter.render(stdoutEntries.get(0).result(), format, includeTimestamps)
+                        : TranscriptionExporter.renderBatch(stdoutEntries, format, includeTimestamps);
+                out.print(rendered);
+                if (!rendered.endsWith("\n")) {
+                    out.println();
                 }
             }
             return 0;
@@ -224,11 +251,18 @@ public final class JWhisperCli {
     }
 
     static WhisperProviderConfig resolveProviderConfig(CliOptions options) {
-        if (options.provider() == null) {
-            return WhisperProviderConfig.fromEnvironment();
+        if (options.provider() != null) {
+            int deviceId = options.deviceId() == null ? 0 : options.deviceId();
+            boolean fallback = Boolean.TRUE.equals(options.providerFallback());
+            return WhisperProviderConfig.of(options.provider(), deviceId, fallback);
         }
-        int deviceId = options.deviceId() == null ? 0 : options.deviceId();
-        return WhisperProviderConfig.of(options.provider(), deviceId, options.providerFallback());
+        WhisperProviderConfig env = WhisperProviderConfig.fromEnvironment();
+        if (options.deviceId() == null && options.providerFallback() == null) {
+            return env;
+        }
+        int deviceId = options.deviceId() != null ? options.deviceId() : env.deviceId();
+        boolean fallback = options.providerFallback() != null ? options.providerFallback() : env.allowCpuFallback();
+        return WhisperProviderConfig.of(env.requestedProvider(), deviceId, fallback);
     }
 
     private static Path resolveTargetFile(
@@ -301,16 +335,25 @@ public final class JWhisperCli {
             out.println("  usableDiskSpace:    unavailable");
         }
 
-        WhisperProviderConfig providerConfig = resolveProviderConfig(options);
-        out.println("  requestedProvider:  " + providerConfig.describe());
+        WhisperProviderConfig providerConfig = null;
+        try {
+            providerConfig = resolveProviderConfig(options);
+            out.println("  requestedProvider:  " + providerConfig.describe());
+        } catch (IllegalArgumentException e) {
+            out.println("  requestedProvider:  invalid (" + firstMessage(e) + ")");
+        }
         try {
             EnumSet<OrtProvider> ortProviders = OrtEnvironment.getAvailableProviders();
             out.println("  ortProviders:       " + ortProviders);
-            try {
-                WhisperExecutionProvider resolved = providerConfig.resolve(ortProviders);
-                out.println("  resolvedProvider:   " + resolved.displayName());
-            } catch (Exception e) {
-                out.println("  resolvedProvider:   unavailable (" + firstMessage(e) + ")");
+            if (providerConfig != null) {
+                try {
+                    WhisperExecutionProvider resolved = providerConfig.resolve(ortProviders);
+                    out.println("  resolvedProvider:   " + resolved.displayName());
+                } catch (Exception e) {
+                    out.println("  resolvedProvider:   unavailable (" + firstMessage(e) + ")");
+                }
+            } else {
+                out.println("  resolvedProvider:   unavailable (invalid provider)");
             }
         } catch (Throwable e) {
             out.println("  ortProviders:       unavailable (" + firstMessage(e) + ")");
@@ -382,7 +425,7 @@ public final class JWhisperCli {
             String initialPrompt,
             WhisperExecutionProvider provider,
             Integer deviceId,
-            boolean providerFallback
+            Boolean providerFallback
     ) {
         OutputFormat resolvedFormat() {
             if (explicitFormat != null) {
@@ -437,7 +480,7 @@ public final class JWhisperCli {
             String initialPrompt = null;
             WhisperExecutionProvider provider = null;
             Integer deviceId = null;
-            boolean providerFallback = false;
+            Boolean providerFallback = null;
             boolean positionalOnly = false;
 
             for (int i = 0; i < args.length; i++) {
@@ -471,15 +514,11 @@ public final class JWhisperCli {
                     case "--beam-size" -> beamSize = parsePositiveInt(requireOptionValue(args, ++i, "--beam-size"), "--beam-size");
                     case "--timestamps" -> timestamps = Boolean.TRUE;
                     case "--no-timestamps" -> timestamps = Boolean.FALSE;
-                    case "--prompt", "--initial-prompt" -> {
-                        if (++i >= args.length) {
-                            throw new IllegalArgumentException(token + " requires a value.");
-                        }
-                        initialPrompt = args[i];
-                    }
+                    case "--prompt", "--initial-prompt" -> initialPrompt = requireOptionValue(args, ++i, token);
                     case "--provider" -> provider = WhisperExecutionProvider.from(requireOptionValue(args, ++i, "--provider"));
                     case "--device-id" -> deviceId = parseNonNegativeInt(requireOptionValue(args, ++i, "--device-id"), "--device-id");
-                    case "--provider-fallback" -> providerFallback = true;
+                    case "--provider-fallback" -> providerFallback = Boolean.TRUE;
+                    case "--no-provider-fallback" -> providerFallback = Boolean.FALSE;
                     case "--diagnostics" -> diagnostics = true;
                     case "--list-models" -> listModels = true;
                     case "--help", "-h" -> help = true;
@@ -520,7 +559,7 @@ public final class JWhisperCli {
                 throw new IllegalArgumentException(optionName + " requires a value.");
             }
             String value = args[index];
-            if (value == null || value.isBlank() || value.startsWith("--")) {
+            if (value == null || value.isBlank() || value.startsWith("-")) {
                 throw new IllegalArgumentException(optionName + " requires a value.");
             }
             return value;

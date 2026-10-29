@@ -881,6 +881,25 @@ public final class WhisperOnnxEngine implements WhisperEngineAgent {
     }
 
     @Override
+    public synchronized void unloadModel(ModelDescriptor descriptor) {
+        if (descriptor != null && loadedModel != null && descriptor.id().equals(loadedModel.id())) {
+            closeSessions();
+        }
+    }
+
+    @Override
+    public synchronized String activeProviderDisplayName() {
+        if (loadedModel != null && encoderSession != null) {
+            return activeProvider.displayName();
+        }
+        try {
+            return providerConfig.resolve(OrtEnvironment.getAvailableProviders()).displayName();
+        } catch (Throwable ignored) {
+            return WhisperExecutionProvider.CPU.displayName();
+        }
+    }
+
+    @Override
     public synchronized void close() {
         cancel();
         closeSessions();

@@ -8,25 +8,38 @@ JWhisper is a Java 17+ local Whisper transcription runtime built on ONNX Runtime
 
 Audio stays local during transcription. Model files are downloaded once into the user's JWhisper model store (`~/.jwhisper/models`).
 
+## Screenshots
+
+<p align="center">
+  <img width="860" alt="JWhisper desktop app in Obsidian Dark theme showing SRT subtitle transcription" src="assets/screenshots/desktop-dark-srt.png" />
+</p>
+
+<p align="center">
+  <img width="424" alt="JWhisper desktop app in Pearl Light theme" src="assets/screenshots/desktop-light-txt.png" />
+  <img width="424" alt="JWhisper desktop app batch transcription and JSON export" src="assets/screenshots/desktop-dark-batch.png" />
+</p>
+
+<p align="center">
+  <img width="680" alt="JWhisper Whisper Model Store dialog" src="assets/screenshots/model-manager-dark.png" />
+</p>
+
 ## Current Features
 
 - Local Whisper ONNX transcription (greedy and beam-search decoding, temperature fallback, timestamp-based long-form seeking, initial prompts)
 - Language selection / auto-detection and `transcribe` / `translate` (to English) tasks in both CLI and desktop UI, with English-only model guards
-- Export formats: `TXT`, `SRT`, `VTT`, and `JSON` (live format switcher in the desktop UI; `--format` or automatic extension inference in the CLI)
-- Single-file and batch multi-file / folder transcription in both CLI (`--output-dir`) and desktop UI (queue with per-file selector and `Save all...`)
+- Export formats: `TXT`, `SRT`, `VTT`, and `JSON` (live format switcher with edit preservation in the desktop UI; `--format` or automatic extension inference in the CLI)
+- Single-file and batch multi-file / folder transcription in both CLI (`--output-dir`) and desktop UI (queue with per-file and combined batch views plus `Save all...`)
 - Audio and video input (`wav`, `mp3`, `m4a`, `flac`, `ogg`, `aac`, `opus`, `wma`, `aiff`, `aif`, `caf`, `mp4`, `mkv`, `mov`, `webm`, `avi`, `m4v`) through `ffmpeg`
 - Automatic first-run `tiny.en` setup in the desktop app
-- Revision-pinned model downloads with resumable partial downloads and SHA-256 verification
-- Model manager dialog with background downloads, delete, and default-model selection
-- Obsidian Dark and Pearl Light brand themes (`assets/brand/palette.json`) with live theme toggle and macOS appearance detection
+- Revision-pinned model downloads with cancellable/resumable partial downloads and SHA-256 verification
+- Model manager dialog with background downloads, cancellation, delete, and default-model selection
+- Obsidian Dark and Pearl Light brand themes (`assets/brand/palette.json`) with persisted theme toggle, macOS appearance detection, and full keyboard navigation (`Cmd/Ctrl+O`, `Cmd/Ctrl+,`, `Cmd/Ctrl+S`, `Cmd/Ctrl+1..4`, `Cmd/Ctrl+Shift+T`, `Esc`)
 - Cross-platform sculpted waveform application icons across Swing windows, OS taskbar/dock, About dialog, and `jpackage` desktop app bundles
 - Cooperative plus native ONNX Runtime cancellation
 - CPU runtime, Apple/CoreML-oriented runtime variant, and CUDA-oriented GPU runtime variant, plus `--diagnostics` and `--list-models`
 - Checked-in Gradle 9.8.2 wrapper (`./gradlew` / `gradlew.bat`)
 - CI builds/tests on Windows, Linux, and macOS with JDK 17 and JDK 25
 - End-to-end reference transcription gate using OpenAI Whisper's pinned `tests/jfk.flac` fixture (SHA-256 verified, TXT + SRT)
-
-The production-readiness definition and evidence ledger are in [`docs/READINESS.md`](docs/READINESS.md). Contributor and coding-agent instructions are in [`AGENTS.md`](AGENTS.md).
 
 ## Requirements
 
@@ -57,7 +70,7 @@ JWHISPER_RUNTIME=apple ./run.sh
 JWHISPER_RUNTIME=gpu ./run.sh
 ```
 
-Force a UI theme:
+Force a UI theme (otherwise JWhisper remembers your last theme toggle or follows macOS dark/light appearance):
 
 ```sh
 JWHISPER_THEME=dark ./run.sh
@@ -88,7 +101,7 @@ Download the selected model if missing and write SRT subtitles (format is inferr
 Multilingual transcription, translation to English, beam search, timestamps, and initial prompt:
 
 ```sh
-./gradlew "-PjwhisperRuntime=cpu" cli --args="speech.mp3 --model small --language fr --translate --beam-size 3 --format vtt --output speech.en.vtt"
+./gradlew "-PjwhisperRuntime=cpu" cli --args="speech.mp3 --model medium --language fr --translate --beam-size 3 --format vtt --output speech.en.vtt"
 ./gradlew "-PjwhisperRuntime=cpu" cli --args="meeting.m4a --model base.en --prompt \"JWhisper, ONNX Runtime\" --format json --timestamps --output meeting.json"
 ```
 
@@ -98,7 +111,7 @@ Batch transcribe multiple files or an entire directory tree into an output direc
 ./gradlew "-PjwhisperRuntime=cpu" cli --args="recordings/ --model tiny.en --format srt --output-dir subtitles/"
 ```
 
-Run `--help` for all flags (`--language`, `--task`, `--translate`, `--beam-size`, `--timestamps`, `--no-timestamps`, `--prompt`, `--format`, `--output`, `--output-dir`, `--provider`, `--device-id`, `--provider-fallback`, `--list-models`, `--diagnostics`, `--quiet`).
+Run `--help` for all flags (`--language`, `--task`, `--translate`, `--beam-size`, `--timestamps`, `--no-timestamps`, `--prompt`, `--format`, `--output`, `--output-dir`, `--provider`, `--device-id`, `--provider-fallback`, `--no-provider-fallback`, `--list-models`, `--diagnostics`, `--quiet`).
 
 The CLI accepts common audio formats plus `mp4`, `mkv`, `mov`, `webm`, `avi`, and `m4v`. `ffmpeg` extracts and resamples the media audio track to Whisper's mono 16 kHz input.
 
@@ -138,9 +151,18 @@ Models live in:
 ~/.jwhisper/models
 ```
 
+Built-in catalog models (`--list-models`):
+
+- `tiny.en` — Fast English-only model (285 MB)
+- `base.en` — Balanced English-only model (294 MB)
+- `small.en` — More accurate English-only model (970 MB)
+- `medium` — High-quality multilingual transcription and English translation (3.2 GB)
+- `large-v3` — Full multilingual Whisper Large v3 (6.5 GB)
+- `large-v3-turbo` — High-throughput multilingual Whisper Large v3 Turbo (4.1 GB)
+
 Catalog models are pinned to immutable Hugging Face revisions. Interrupted `.download` files are retained so the next attempt can resume when the server supports HTTP Range requests. Files with a catalog SHA-256 must pass integrity verification before installation completes.
 
-Because revision tracking is now part of installation metadata, older unpinned installations can be treated as stale and may need to be downloaded again.
+Because revision tracking is part of installation metadata, older unpinned installations are treated as stale and may need to be downloaded again.
 
 ## Execution Providers
 
@@ -210,12 +232,12 @@ Jar artifacts are written under `build/libs/` and packaged desktop app images un
 - Apple runtime variant build/tests
 - CUDA-oriented GPU runtime variant build/tests
 - CLI startup on the desktop CPU matrix
-- End-to-end `tiny.en` transcription of OpenAI Whisper's JFK reference audio
+- End-to-end `tiny.en` transcription of OpenAI Whisper's JFK reference audio (TXT + timed SRT validation)
 
-Successful compilation of an accelerated variant is not treated as proof of accelerated inference. Real provider execution/performance validation remains a separate production gate tracked in [`docs/READINESS.md`](docs/READINESS.md).
+Successful compilation of an accelerated variant is not treated as proof of accelerated inference. Real provider execution and performance benchmarking on target hardware remain a separate validation gate.
 
 ## Future SLOPOS desktop, PARAMA and low-memory targets
 
-**Planned, not implemented:** jwhisper is an independently authored candidate for the optional SLOPOS Dictation transcription provider (not always-on service). Target supported **Linux/SLOPOS** desktop integration first; any native **PARAMA/SURYA** port depends on the real kernel, runtime, graphics/input, filesystem and native-library requirements specified in [AGENTS.md](AGENTS.md#future-sloposparama-integration-and-pi-zero-2-w-efficiency-goals). The aim is high-quality useful work on constrained hardware, not a claim that every heavy workload fits.
+**Planned, not implemented:** JWhisper is an independently authored candidate for an optional SLOPOS Dictation transcription provider (never an always-on background service). Target supported **Linux/SLOPOS** desktop integration first; any native **PARAMA/SURYA** port depends on real kernel, runtime, graphics/input, filesystem, and native-library support. The aim is high-quality useful work on constrained hardware, not a claim that every heavy workload fits.
 
-**Pi Zero 2 W (512 MB, quad Cortex-A53) profile:** Offer a small/quantized model only where its actual footprint and CPU kernel support are validated; stream and chunk audio, cap decoder state/temp arrays, queue length, CPU threads and previews. Model manager must preflight weights + ONNX runtime + Java heap/native allocations against remaining RAM, reject unsupported models before OOM, and never claim a 512 MB full-size model fits. Auto-start no model and never upload audio without explicit opt-in. Validate actual app/runtime compatibility and performance on the board; **no verified Zero 2 W or native PARAMA support is claimed here**. Installation should be optional, with no eager services or model downloads in the lightweight SLOPOS base image.
+**Pi Zero 2 W (512 MB, quad Cortex-A53) profile:** Offer a small/quantized model only where its actual footprint and CPU kernel support are validated; stream and chunk audio, cap decoder state/temp arrays, queue length, CPU threads, and previews. The model manager must preflight weights + ONNX Runtime + Java heap/native allocations against remaining RAM, reject unsupported models before OOM, and never claim a 512 MB full-size model fits. Auto-start no model and never upload audio without explicit opt-in. Validate actual app/runtime compatibility and performance on the board; **no verified Zero 2 W or native PARAMA support is claimed here**. Installation should be optional, with no eager services or model downloads in the lightweight SLOPOS base image.

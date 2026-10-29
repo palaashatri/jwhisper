@@ -55,7 +55,7 @@ final class JWhisperCliTest {
         assertEquals(OutputFormat.VTT, options.resolvedFormat());
         assertEquals(WhisperExecutionProvider.COREML, options.provider());
         assertEquals(1, options.deviceId());
-        assertTrue(options.providerFallback());
+        assertEquals(Boolean.TRUE, options.providerFallback());
         assertTrue(options.quiet());
 
         TranscriptionOptions engineOptions = JWhisperCli.buildTranscriptionOptions(options);
@@ -68,6 +68,16 @@ final class JWhisperCliTest {
         assertEquals(2.4, engineOptions.compressionRatioThreshold());
         assertEquals(-1.0, engineOptions.logProbabilityThreshold());
         assertEquals(0.6, engineOptions.noSpeechThreshold());
+    }
+
+    @Test
+    void preservesDeviceIdAndProviderFallbackWithoutExplicitProviderFlag() {
+        JWhisperCli.CliOptions options = JWhisperCli.CliOptions.parse(new String[]{
+                "clip.wav", "--device-id", "2", "--no-provider-fallback"
+        });
+        assertNull(options.provider());
+        assertEquals(2, options.deviceId());
+        assertEquals(Boolean.FALSE, options.providerFallback());
     }
 
     @Test
@@ -111,19 +121,41 @@ final class JWhisperCliTest {
     }
 
     @Test
-    void rejectsFollowingFlagConsumedAsOptionValue() {
+    void rejectsFollowingLongOrShortFlagConsumedAsOptionValue() {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> JWhisperCli.CliOptions.parse(new String[]{"clip.flac", "--language", "--quiet"})
         );
         assertThrows(
                 IllegalArgumentException.class,
-                () -> JWhisperCli.CliOptions.parse(new String[]{"clip.flac", "--model", "--download-model"})
+                () -> JWhisperCli.CliOptions.parse(new String[]{"clip.flac", "-m", "-q"})
         );
         assertThrows(
                 IllegalArgumentException.class,
-                () -> JWhisperCli.CliOptions.parse(new String[]{"clip.flac", "--output", "--quiet"})
+                () -> JWhisperCli.CliOptions.parse(new String[]{"clip.flac", "--prompt", "--quiet"})
         );
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> JWhisperCli.CliOptions.parse(new String[]{"clip.flac", "--output", "-f"})
+        );
+    }
+
+    @Test
+    void rejectsEnglishOnlyModelWithTranslationBeforeDownloading() throws Exception {
+        Path wav = Files.createFile(tempDir.resolve("clip.wav"));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+        int code = JWhisperCli.run(
+                new String[]{wav.toString(), "--model", "base.en", "--translate", "--download-model"},
+                new PrintStream(out, true, StandardCharsets.UTF_8),
+                new PrintStream(err, true, StandardCharsets.UTF_8)
+        );
+        assertTrue(code == 8 || code == 3);
+        if (code == 8) {
+            String errText = err.toString(StandardCharsets.UTF_8);
+            assertTrue(errText.contains("English-only"));
+            assertFalse(errText.contains("Downloading"), "Must reject incompatible .en + --translate before downloading");
+        }
     }
 
     @Test
@@ -181,7 +213,7 @@ final class JWhisperCliTest {
     }
 
     @Test
-    void rejectsSingleOutputFileWithMultipleBatchInputs() throws Exception {
+    void rejectsSingleOutputFileOrStdoutSubtitlesWithMultipleBatchInputs() throws Exception {
         Path a = Files.createFile(tempDir.resolve("a.wav"));
         Path b = Files.createFile(tempDir.resolve("b.wav"));
         Path singleOut = tempDir.resolve("out.txt");
@@ -193,10 +225,20 @@ final class JWhisperCliTest {
                 new PrintStream(out, true, StandardCharsets.UTF_8),
                 new PrintStream(err, true, StandardCharsets.UTF_8)
         );
-        // Should return usage error (2) unless ffmpeg is missing on a minimal test host (3).
         assertTrue(exitCode == 2 || exitCode == 3);
         if (exitCode == 2) {
             assertTrue(err.toString(StandardCharsets.UTF_8).contains("--output-dir"));
+        }
+
+        ByteArrayOutputStream srtErr = new ByteArrayOutputStream();
+        int srtStdoutCode = JWhisperCli.run(
+                new String[]{a.toString(), b.toString(), "--format", "srt"},
+                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8),
+                new PrintStream(srtErr, true, StandardCharsets.UTF_8)
+        );
+        assertTrue(srtStdoutCode == 2 || srtStdoutCode == 3);
+        if (srtStdoutCode == 2) {
+            assertTrue(srtErr.toString(StandardCharsets.UTF_8).contains("--output-dir"));
         }
     }
 }

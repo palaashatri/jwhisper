@@ -106,6 +106,22 @@ public final class TranscriptionAgent implements AutoCloseable {
         return future;
     }
 
+    public String activeProviderDisplayName() {
+        return whisperEngineAgent.activeProviderDisplayName();
+    }
+
+    public void unloadModelSync(ModelDescriptor model) {
+        if (model == null) {
+            return;
+        }
+        try {
+            executorService.submit(() -> whisperEngineAgent.unloadModel(model))
+                    .get(3, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Exception ignored) {
+            whisperEngineAgent.unloadModel(model);
+        }
+    }
+
     public void cancel() {
         whisperEngineAgent.cancel();
         Future<?> task = currentTask.getAndSet(null);

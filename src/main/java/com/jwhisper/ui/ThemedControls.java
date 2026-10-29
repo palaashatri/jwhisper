@@ -1,5 +1,11 @@
 package com.jwhisper.ui;
 
+import javax.accessibility.Accessible;
+import javax.accessibility.AccessibleContext;
+import javax.accessibility.AccessibleRole;
+import javax.accessibility.AccessibleState;
+import javax.accessibility.AccessibleStateSet;
+import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
@@ -11,14 +17,17 @@ import javax.swing.JProgressBar;
 import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
+import javax.swing.KeyStroke;
+import javax.swing.ScrollPaneConstants;
 import javax.swing.plaf.basic.BasicComboBoxUI;
 import javax.swing.plaf.basic.BasicComboPopup;
 import javax.swing.plaf.basic.BasicProgressBarUI;
 import javax.swing.plaf.basic.BasicScrollBarUI;
 import javax.swing.plaf.basic.ComboPopup;
+import javax.swing.text.JTextComponent;
+import javax.swing.undo.UndoManager;
 import java.awt.BasicStroke;
 import java.awt.Color;
-import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
@@ -29,8 +38,12 @@ import java.awt.Graphics2D;
 import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.Toolkit;
+import java.awt.event.ActionEvent;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
+import java.awt.event.InputEvent;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Path2D;
@@ -44,7 +57,46 @@ import java.util.function.Consumer;
  * obsidian palette so macOS Aqua, Windows, and Linux render identically.
  */
 final class ThemedControls {
+    private static final String COMBO_CURSOR_KEY = "jwhisper.comboCursorSynced";
+    private static final String UNDO_INSTALLED_KEY = "jwhisper.undoManager";
+
     private ThemedControls() {
+    }
+
+    static UndoManager installUndoSupport(JTextComponent textComponent) {
+        Object existing = textComponent.getClientProperty(UNDO_INSTALLED_KEY);
+        if (existing instanceof UndoManager manager) {
+            return manager;
+        }
+        UndoManager undoManager = new UndoManager();
+        textComponent.putClientProperty(UNDO_INSTALLED_KEY, undoManager);
+        textComponent.getDocument().addUndoableEditListener(event -> undoManager.addEdit(event.getEdit()));
+
+        int shortcutMask = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
+        textComponent.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_Z, shortcutMask), "jwhisper-undo");
+        textComponent.getInputMap().put(
+                KeyStroke.getKeyStroke(KeyEvent.VK_Z, shortcutMask | InputEvent.SHIFT_DOWN_MASK),
+                "jwhisper-redo"
+        );
+        textComponent.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_Y, shortcutMask), "jwhisper-redo");
+
+        textComponent.getActionMap().put("jwhisper-undo", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (textComponent.isEditable() && textComponent.isEnabled() && undoManager.canUndo()) {
+                    undoManager.undo();
+                }
+            }
+        });
+        textComponent.getActionMap().put("jwhisper-redo", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (textComponent.isEditable() && textComponent.isEnabled() && undoManager.canRedo()) {
+                    undoManager.redo();
+                }
+            }
+        });
+        return undoManager;
     }
 
     static void styleComboBox(JComboBox<?> combo, UiTheme theme) {
@@ -53,6 +105,11 @@ final class ThemedControls {
         combo.setBackground(theme.field());
         combo.setFont(combo.getFont().deriveFont(Font.PLAIN, 13f));
         combo.setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 6));
+        UiTheme.syncInteractiveCursor(combo);
+        if (!Boolean.TRUE.equals(combo.getClientProperty(COMBO_CURSOR_KEY))) {
+            combo.putClientProperty(COMBO_CURSOR_KEY, Boolean.TRUE);
+            combo.addPropertyChangeListener("enabled", evt -> UiTheme.syncInteractiveCursor(combo));
+        }
         combo.setUI(new BrandComboBoxUI(theme));
         combo.repaint();
     }
@@ -60,7 +117,13 @@ final class ThemedControls {
     static void styleScrollPane(JScrollPane scrollPane, UiTheme theme) {
         scrollPane.setBackground(theme.field());
         scrollPane.getViewport().setBackground(theme.field());
-        scrollPane.setBorder(BorderFactory.createLineBorder(theme.fieldBorder()));
+        scrollPane.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(theme.fieldBorder()),
+                BorderFactory.createEmptyBorder(4, 0, 4, 0)
+        ));
+        scrollPane.setCorner(ScrollPaneConstants.LOWER_RIGHT_CORNER, themedCorner(theme));
+        scrollPane.setCorner(ScrollPaneConstants.UPPER_RIGHT_CORNER, themedCorner(theme));
+        scrollPane.setCorner(ScrollPaneConstants.LOWER_LEFT_CORNER, themedCorner(theme));
         JScrollBar vertical = scrollPane.getVerticalScrollBar();
         if (vertical != null) {
             vertical.setOpaque(true);
@@ -75,6 +138,14 @@ final class ThemedControls {
             horizontal.setPreferredSize(new Dimension(Integer.MAX_VALUE, 10));
             horizontal.setUI(new BrandScrollBarUI(theme));
         }
+    }
+
+    private static JPanel themedCorner(UiTheme theme) {
+        JPanel corner = new JPanel();
+        corner.setOpaque(true);
+        corner.setFocusable(false);
+        corner.setBackground(theme.field());
+        return corner;
     }
 
     static final class CardPanel extends JPanel {
@@ -124,6 +195,7 @@ final class ThemedControls {
             this.theme = theme;
             this.accentTint = accentTint;
             setOpaque(false);
+            setFocusable(false);
             setFont(getFont().deriveFont(Font.BOLD, 11f));
             setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 10));
             applyColors();
@@ -168,6 +240,7 @@ final class ThemedControls {
 
         StatusDot(Color color) {
             this.color = color;
+            setFocusable(false);
             setPreferredSize(new Dimension(10, 10));
             setMinimumSize(new Dimension(10, 10));
             setMaximumSize(new Dimension(10, 10));
@@ -197,6 +270,7 @@ final class ThemedControls {
             super(0, 100);
             this.theme = theme;
             setOpaque(false);
+            setFocusable(false);
             setBorderPainted(false);
             setStringPainted(false);
             setPreferredSize(new Dimension(420, 8));
@@ -259,6 +333,7 @@ final class ThemedControls {
             setOpaque(false);
             setFont(getFont().deriveFont(Font.PLAIN, 13f));
             setBorder(BorderFactory.createEmptyBorder(6, 11, 6, 11));
+            installUndoSupport(this);
             applyColors();
             addFocusListener(new FocusAdapter() {
                 @Override
@@ -281,8 +356,19 @@ final class ThemedControls {
             repaint();
         }
 
+        @Override
+        public void setEnabled(boolean enabled) {
+            super.setEnabled(enabled);
+            applyColors();
+            repaint();
+        }
+
         private void applyColors() {
-            setForeground(theme.text());
+            if (theme == null) {
+                return;
+            }
+            setForeground(isEnabled() ? theme.text() : UiTheme.withAlpha(theme.muted(), 120));
+            setDisabledTextColor(UiTheme.withAlpha(theme.muted(), 120));
             setCaretColor(theme.text());
             setSelectionColor(theme.accent());
             setSelectedTextColor(theme.accentText());
@@ -296,9 +382,12 @@ final class ThemedControls {
             int w = getWidth();
             int h = getHeight();
             int arc = 10;
-            g2.setColor(isEnabled() ? theme.field() : UiTheme.withAlpha(theme.field(), 160));
+            boolean enabled = isEnabled();
+            g2.setColor(enabled ? theme.field() : UiTheme.withAlpha(theme.field(), 135));
             g2.fillRoundRect(0, 0, w - 1, h - 1, arc, arc);
-            g2.setColor(focused && isEnabled() ? theme.accent() : theme.fieldBorder());
+            g2.setColor(!enabled
+                    ? UiTheme.withAlpha(theme.fieldBorder(), 105)
+                    : (focused ? theme.accent() : theme.fieldBorder()));
             g2.drawRoundRect(0, 0, w - 1, h - 1, arc, arc);
             g2.dispose();
 
@@ -308,7 +397,7 @@ final class ThemedControls {
                 Graphics2D pg = (Graphics2D) graphics.create();
                 pg.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
                 pg.setFont(getFont());
-                pg.setColor(theme.subtle());
+                pg.setColor(enabled ? theme.subtle() : UiTheme.withAlpha(theme.muted(), 95));
                 Insets insets = getInsets();
                 FontMetrics fm = pg.getFontMetrics();
                 int y = (h - fm.getHeight()) / 2 + fm.getAscent();
@@ -318,7 +407,7 @@ final class ThemedControls {
         }
     }
 
-    static final class TogglePillButton extends JComponent {
+    static final class TogglePillButton extends JComponent implements Accessible {
         private final String label;
         private UiTheme theme;
         private boolean selected;
@@ -330,19 +419,35 @@ final class ThemedControls {
             this.selected = initialSelected;
             this.theme = theme;
             setOpaque(false);
+            setFocusable(true);
             setFont(new JLabel().getFont().deriveFont(Font.PLAIN, 12.5f));
-            setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            UiTheme.syncInteractiveCursor(this);
+            addFocusListener(new FocusAdapter() {
+                @Override
+                public void focusGained(FocusEvent e) {
+                    repaint();
+                }
+
+                @Override
+                public void focusLost(FocusEvent e) {
+                    repaint();
+                }
+            });
+            getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, 0), "toggle");
+            getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "toggle");
+            getActionMap().put("toggle", new AbstractAction() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    triggerToggle();
+                }
+            });
             addMouseListener(new MouseAdapter() {
                 @Override
                 public void mouseClicked(MouseEvent e) {
-                    if (!isEnabled()) {
-                        return;
+                    if (isEnabled()) {
+                        requestFocusInWindow();
                     }
-                    selected = !selected;
-                    repaint();
-                    if (onToggle != null) {
-                        onToggle.accept(selected);
-                    }
+                    triggerToggle();
                 }
 
                 @Override
@@ -357,6 +462,25 @@ final class ThemedControls {
                     repaint();
                 }
             });
+        }
+
+        private void triggerToggle() {
+            if (!isEnabled()) {
+                return;
+            }
+            selected = !selected;
+            repaint();
+            if (onToggle != null) {
+                onToggle.accept(selected);
+            }
+        }
+
+        @Override
+        public void setEnabled(boolean enabled) {
+            super.setEnabled(enabled);
+            setFocusable(enabled);
+            UiTheme.syncInteractiveCursor(this);
+            repaint();
         }
 
         void setOnToggle(Consumer<Boolean> onToggle) {
@@ -386,6 +510,11 @@ final class ThemedControls {
         }
 
         @Override
+        public Dimension getMinimumSize() {
+            return getPreferredSize();
+        }
+
+        @Override
         protected void paintComponent(Graphics graphics) {
             Graphics2D g2 = (Graphics2D) graphics.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -394,39 +523,80 @@ final class ThemedControls {
             int w = getWidth();
             int h = getHeight();
             int arc = 10;
+            boolean enabled = isEnabled();
 
-            Color fill = selected
-                    ? theme.accentSoft()
-                    : (hovering && isEnabled() ? theme.elevatedSurface() : theme.field());
-            Color border = selected
-                    ? theme.accentBorder()
-                    : (hovering && isEnabled() ? theme.accentBorder() : theme.fieldBorder());
+            Color fill;
+            Color border;
+            if (!enabled) {
+                fill = selected
+                        ? UiTheme.withAlpha(theme.elevatedSurface(), theme.dark() ? 165 : 190)
+                        : UiTheme.withAlpha(theme.field(), 145);
+                border = UiTheme.withAlpha(theme.fieldBorder(), 110);
+            } else {
+                fill = selected
+                        ? theme.accentSoft()
+                        : (hovering ? theme.elevatedSurface() : theme.field());
+                border = selected || hovering ? theme.accentBorder() : theme.fieldBorder();
+            }
 
             g2.setColor(fill);
             g2.fillRoundRect(0, 0, w - 1, h - 1, arc, arc);
             g2.setColor(border);
             g2.drawRoundRect(0, 0, w - 1, h - 1, arc, arc);
 
+            if (isFocusOwner() && enabled) {
+                g2.setColor(UiTheme.withAlpha(theme.accentGlow(), 195));
+                g2.setStroke(new BasicStroke(1.5f));
+                g2.drawRoundRect(1, 1, w - 3, h - 3, arc - 2, arc - 2);
+            }
+
             int dotSize = 8;
             int dotX = 11;
             int dotY = (h - dotSize) / 2;
             if (selected) {
-                g2.setColor(theme.accent());
+                g2.setColor(enabled ? theme.accent() : UiTheme.withAlpha(theme.muted(), 115));
                 g2.fillOval(dotX, dotY, dotSize, dotSize);
             } else {
-                g2.setColor(theme.subtle());
+                g2.setColor(enabled ? theme.subtle() : UiTheme.withAlpha(theme.muted(), 90));
                 g2.drawOval(dotX, dotY, dotSize - 1, dotSize - 1);
             }
 
             g2.setFont(getFont());
             FontMetrics fm = g2.getFontMetrics();
-            Color textColor = !isEnabled()
-                    ? (selected ? theme.accent() : theme.subtle())
+            Color textColor = !enabled
+                    ? UiTheme.withAlpha(theme.muted(), 125)
                     : (selected ? (theme.dark() ? theme.accentGlow() : theme.accentStrong()) : theme.muted());
             g2.setColor(textColor);
             int textY = (h - fm.getHeight()) / 2 + fm.getAscent();
             g2.drawString(label, dotX + dotSize + 7, textY);
             g2.dispose();
+        }
+
+        @Override
+        public AccessibleContext getAccessibleContext() {
+            if (accessibleContext == null) {
+                accessibleContext = new AccessibleJComponent() {
+                    @Override
+                    public AccessibleRole getAccessibleRole() {
+                        return AccessibleRole.TOGGLE_BUTTON;
+                    }
+
+                    @Override
+                    public String getAccessibleName() {
+                        return label;
+                    }
+
+                    @Override
+                    public AccessibleStateSet getAccessibleStateSet() {
+                        AccessibleStateSet states = super.getAccessibleStateSet();
+                        if (selected) {
+                            states.add(AccessibleState.CHECKED);
+                        }
+                        return states;
+                    }
+                };
+            }
+            return accessibleContext;
         }
     }
 
@@ -446,9 +616,10 @@ final class ThemedControls {
             this.selectedValue = initialValue;
             this.theme = theme;
             setOpaque(false);
+            setFocusable(false);
             setBorder(BorderFactory.createEmptyBorder(1, 1, 1, 1));
-            for (Option<T> option : this.options) {
-                SegmentCell cell = new SegmentCell(option);
+            for (int idx = 0; idx < this.options.size(); idx++) {
+                SegmentCell cell = new SegmentCell(this.options.get(idx), idx);
                 cells.add(cell);
                 add(cell);
             }
@@ -469,12 +640,27 @@ final class ThemedControls {
             }
         }
 
+        void selectAndNotify(T value) {
+            if (!Objects.equals(this.selectedValue, value)) {
+                this.selectedValue = value;
+                repaint();
+                if (onSelect != null) {
+                    onSelect.accept(selectedValue);
+                }
+            }
+        }
+
         void setTheme(UiTheme theme) {
             this.theme = theme;
             for (SegmentCell cell : cells) {
                 cell.repaint();
             }
             repaint();
+        }
+
+        @Override
+        public Dimension getMinimumSize() {
+            return getPreferredSize();
         }
 
         @Override
@@ -500,36 +686,67 @@ final class ThemedControls {
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             int w = getWidth();
             int h = getHeight();
-            g2.setColor(theme.field());
+            boolean enabled = isEnabled();
+            g2.setColor(enabled ? theme.field() : UiTheme.withAlpha(theme.field(), 145));
             g2.fillRoundRect(0, 0, w - 1, h - 1, 10, 10);
-            g2.setColor(theme.fieldBorder());
+            g2.setColor(enabled ? theme.fieldBorder() : UiTheme.withAlpha(theme.fieldBorder(), 105));
             g2.drawRoundRect(0, 0, w - 1, h - 1, 10, 10);
             g2.dispose();
             super.paintComponent(graphics);
         }
 
-        private final class SegmentCell extends JComponent {
+        private final class SegmentCell extends JComponent implements Accessible {
             private final Option<T> option;
+            private final int cellIndex;
             private boolean hovering;
 
-            private SegmentCell(Option<T> option) {
+            private SegmentCell(Option<T> option, int cellIndex) {
                 this.option = option;
+                this.cellIndex = cellIndex;
                 setOpaque(false);
+                setFocusable(true);
                 setFont(new JLabel().getFont().deriveFont(Font.BOLD, 12f));
-                setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                UiTheme.syncInteractiveCursor(this);
+                addFocusListener(new FocusAdapter() {
+                    @Override
+                    public void focusGained(FocusEvent e) {
+                        repaint();
+                    }
+
+                    @Override
+                    public void focusLost(FocusEvent e) {
+                        repaint();
+                    }
+                });
+                getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, 0), "select");
+                getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "select");
+                getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_LEFT, 0), "prev");
+                getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_RIGHT, 0), "next");
+                getActionMap().put("select", new AbstractAction() {
+                    @Override
+                    public void actionPerformed(ActionEvent e) {
+                        activateCell();
+                    }
+                });
+                getActionMap().put("prev", new AbstractAction() {
+                    @Override
+                    public void actionPerformed(ActionEvent e) {
+                        moveAdjacent(-1);
+                    }
+                });
+                getActionMap().put("next", new AbstractAction() {
+                    @Override
+                    public void actionPerformed(ActionEvent e) {
+                        moveAdjacent(1);
+                    }
+                });
                 addMouseListener(new MouseAdapter() {
                     @Override
                     public void mouseClicked(MouseEvent e) {
-                        if (!SegmentedPillGroup.this.isEnabled() || !isEnabled()) {
-                            return;
+                        if (isCellEnabled()) {
+                            requestFocusInWindow();
                         }
-                        if (!Objects.equals(selectedValue, option.value())) {
-                            selectedValue = option.value();
-                            SegmentedPillGroup.this.repaint();
-                            if (onSelect != null) {
-                                onSelect.accept(selectedValue);
-                            }
-                        }
+                        activateCell();
                     }
 
                     @Override
@@ -546,10 +763,44 @@ final class ThemedControls {
                 });
             }
 
+            private boolean isCellEnabled() {
+                return SegmentedPillGroup.this.isEnabled() && isEnabled();
+            }
+
+            private void activateCell() {
+                if (!isCellEnabled()) {
+                    return;
+                }
+                selectAndNotify(option.value());
+            }
+
+            private void moveAdjacent(int delta) {
+                if (!isCellEnabled() || cells.isEmpty()) {
+                    return;
+                }
+                int nextIdx = (cellIndex + delta + cells.size()) % cells.size();
+                SegmentCell target = cells.get(nextIdx);
+                target.requestFocusInWindow();
+                target.activateCell();
+            }
+
+            @Override
+            public void setEnabled(boolean enabled) {
+                super.setEnabled(enabled);
+                setFocusable(enabled && SegmentedPillGroup.this.isEnabled());
+                UiTheme.syncInteractiveCursor(this);
+                repaint();
+            }
+
             @Override
             public Dimension getPreferredSize() {
                 FontMetrics fm = getFontMetrics(getFont());
                 return new Dimension(fm.stringWidth(option.label()) + 22, 24);
+            }
+
+            @Override
+            public Dimension getMinimumSize() {
+                return getPreferredSize();
             }
 
             @Override
@@ -561,13 +812,13 @@ final class ThemedControls {
                 int w = getWidth();
                 int h = getHeight();
                 boolean active = Objects.equals(selectedValue, option.value());
-                boolean groupEnabled = SegmentedPillGroup.this.isEnabled() && isEnabled();
+                boolean groupEnabled = isCellEnabled();
 
                 if (active) {
                     if (groupEnabled) {
                         g2.setPaint(new GradientPaint(0, 0, theme.accent(), 0, h, theme.accentStrong()));
                     } else {
-                        g2.setColor(theme.accentSoft());
+                        g2.setColor(UiTheme.withAlpha(theme.elevatedSurface(), theme.dark() ? 195 : 220));
                     }
                     g2.fillRoundRect(0, 0, w, h, 8, 8);
                 } else if (hovering && groupEnabled) {
@@ -575,11 +826,17 @@ final class ThemedControls {
                     g2.fillRoundRect(0, 0, w, h, 8, 8);
                 }
 
+                if (isFocusOwner() && groupEnabled) {
+                    g2.setColor(UiTheme.withAlpha(theme.accentGlow(), 210));
+                    g2.setStroke(new BasicStroke(1.5f));
+                    g2.drawRoundRect(1, 1, w - 3, h - 3, 7, 7);
+                }
+
                 g2.setFont(getFont().deriveFont(active ? Font.BOLD : Font.PLAIN, 12f));
                 FontMetrics fm = g2.getFontMetrics();
                 Color fg;
                 if (!groupEnabled) {
-                    fg = active ? (theme.dark() ? theme.accentGlow() : theme.accent()) : theme.subtle();
+                    fg = UiTheme.withAlpha(theme.muted(), active ? 135 : 95);
                 } else if (active) {
                     fg = theme.accentText();
                 } else {
@@ -590,6 +847,34 @@ final class ThemedControls {
                 int ty = (h - fm.getHeight()) / 2 + fm.getAscent();
                 g2.drawString(option.label(), tx, ty);
                 g2.dispose();
+            }
+
+            @Override
+            public AccessibleContext getAccessibleContext() {
+                if (accessibleContext == null) {
+                    accessibleContext = new AccessibleJComponent() {
+                        @Override
+                        public AccessibleRole getAccessibleRole() {
+                            return AccessibleRole.RADIO_BUTTON;
+                        }
+
+                        @Override
+                        public String getAccessibleName() {
+                            return option.label();
+                        }
+
+                        @Override
+                        public AccessibleStateSet getAccessibleStateSet() {
+                            AccessibleStateSet states = super.getAccessibleStateSet();
+                            if (Objects.equals(selectedValue, option.value())) {
+                                states.add(AccessibleState.CHECKED);
+                                states.add(AccessibleState.SELECTED);
+                            }
+                            return states;
+                        }
+                    };
+                }
+                return accessibleContext;
             }
         }
     }
@@ -616,13 +901,16 @@ final class ThemedControls {
                     chevron.moveTo(cx - 4.0f, cy - 1.8f);
                     chevron.lineTo(cx, cy + 2.4f);
                     chevron.lineTo(cx + 4.0f, cy - 1.8f);
-                    g2.setColor(comboBox != null && comboBox.isEnabled() ? theme.muted() : theme.subtle());
+                    g2.setColor(comboBox != null && comboBox.isEnabled()
+                            ? theme.muted()
+                            : UiTheme.withAlpha(theme.muted(), 100));
                     g2.setStroke(new BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
                     g2.draw(chevron);
                     g2.dispose();
                 }
             };
             arrow.setOpaque(false);
+            arrow.setFocusable(false);
             arrow.setContentAreaFilled(false);
             arrow.setBorderPainted(false);
             arrow.setFocusPainted(false);
@@ -663,9 +951,11 @@ final class ThemedControls {
             boolean enabled = c.isEnabled();
             hasFocus = comboBox.hasFocus();
 
-            g2.setColor(enabled ? theme.field() : UiTheme.withAlpha(theme.field(), 155));
+            g2.setColor(enabled ? theme.field() : UiTheme.withAlpha(theme.field(), 145));
             g2.fillRoundRect(0, 0, w - 1, h - 1, arc, arc);
-            g2.setColor(hasFocus && enabled ? theme.accent() : theme.fieldBorder());
+            g2.setColor(!enabled
+                    ? UiTheme.withAlpha(theme.fieldBorder(), 105)
+                    : (hasFocus ? theme.accent() : theme.fieldBorder()));
             g2.drawRoundRect(0, 0, w - 1, h - 1, arc, arc);
             g2.dispose();
 
@@ -691,7 +981,7 @@ final class ThemedControls {
             if (c instanceof JComponent jc) {
                 jc.setOpaque(false);
             }
-            c.setForeground(comboBox.isEnabled() ? theme.text() : theme.subtle());
+            c.setForeground(comboBox.isEnabled() ? theme.text() : UiTheme.withAlpha(theme.muted(), 125));
             c.setBackground(theme.field());
             currentValuePane.paintComponent(g, c, comboBox, bounds.x, bounds.y, bounds.width, bounds.height, false);
         }
@@ -716,6 +1006,7 @@ final class ThemedControls {
 
         private static JButton zeroButton() {
             JButton btn = new JButton();
+            btn.setFocusable(false);
             btn.setPreferredSize(new Dimension(0, 0));
             btn.setMinimumSize(new Dimension(0, 0));
             btn.setMaximumSize(new Dimension(0, 0));

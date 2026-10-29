@@ -7,11 +7,15 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class ModelDownloadService implements AutoCloseable {
     private final ModelManagerAgent modelManagerAgent;
     private final ExecutorService executorService;
     private final ConcurrentHashMap<String, ModelDownloadState> states = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Future<?>> futures = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
     private final CopyOnWriteArrayList<ModelDownloadListener> listeners = new CopyOnWriteArrayList<>();
 
     public ModelDownloadService(ModelManagerAgent modelManagerAgent) {
@@ -43,10 +47,49 @@ public final class ModelDownloadService implements AutoCloseable {
             return existing;
         }
 
-        ModelDownloadState pending = new ModelDownloadState(descriptor, ModelDownloadStatus.PENDING, 0.0, "Waiting to download " + descriptor.displayName() + "...", null);
+        AtomicBoolean cancelFlag = new AtomicBoolean(false);
+        cancelFlags.put(descriptor.id(), cancelFlag);
+        ModelDownloadState pending = new ModelDownloadState(
+                descriptor,
+                ModelDownloadStatus.PENDING,
+                0.0,
+                "Waiting to download " + descriptor.displayName() + "...",
+                null
+        );
         update(pending);
-        executorService.submit(() -> runDownload(descriptor));
+        Future<?> future = executorService.submit(() -> runDownload(descriptor, cancelFlag));
+        futures.put(descriptor.id(), future);
         return pending;
+    }
+
+    public void cancelDownload(ModelDescriptor descriptor) {
+        if (descriptor == null) {
+            return;
+        }
+        AtomicBoolean flag = cancelFlags.get(descriptor.id());
+        if (flag != null) {
+            flag.set(true);
+        }
+        Future<?> future = futures.remove(descriptor.id());
+        if (future != null) {
+            future.cancel(true);
+        }
+        ModelDownloadState current = states.get(descriptor.id());
+        if (current != null && current.isActive()) {
+            update(new ModelDownloadState(
+                    descriptor,
+                    ModelDownloadStatus.CANCELED,
+                    current.fraction(),
+                    descriptor.displayName() + " download canceled (partial progress saved).",
+                    null
+            ));
+        }
+    }
+
+    public void cancelAllActive() {
+        for (ModelDownloadState active : activeDownloads()) {
+            cancelDownload(active.descriptor());
+        }
     }
 
     public Optional<ModelDownloadState> stateFor(ModelDescriptor descriptor) {
@@ -74,25 +117,63 @@ public final class ModelDownloadService implements AutoCloseable {
 
     @Override
     public void close() {
+        cancelAllActive();
         executorService.shutdownNow();
     }
 
-    private void runDownload(ModelDescriptor descriptor) {
+    private void runDownload(ModelDescriptor descriptor, AtomicBoolean cancelFlag) {
         try {
+            if (cancelFlag.get()) {
+                return;
+            }
             update(new ModelDownloadState(descriptor, ModelDownloadStatus.RUNNING, 0.0, "Downloading " + descriptor.displayName() + "...", null));
-            modelManagerAgent.downloadModel(descriptor, (fraction, status) -> update(new ModelDownloadState(
-                    descriptor,
-                    ModelDownloadStatus.RUNNING,
-                    fraction,
-                    descriptor.displayName() + ": " + status,
-                    null
-            )));
-            update(new ModelDownloadState(descriptor, ModelDownloadStatus.SUCCEEDED, 1.0, descriptor.displayName() + " ready.", null));
+            modelManagerAgent.downloadModel(descriptor, (fraction, status) -> {
+                if (!cancelFlag.get()) {
+                    update(new ModelDownloadState(
+                            descriptor,
+                            ModelDownloadStatus.RUNNING,
+                            fraction,
+                            descriptor.displayName() + ": " + status,
+                            null
+                    ));
+                }
+            }, cancelFlag::get);
+            if (!cancelFlag.get()) {
+                update(new ModelDownloadState(descriptor, ModelDownloadStatus.SUCCEEDED, 1.0, descriptor.displayName() + " ready.", null));
+            }
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            update(new ModelDownloadState(descriptor, ModelDownloadStatus.FAILED, 0.0, "Download failed. Try again.", "Download interrupted."));
+            // Clear interrupt status so the shared single-thread download executor remains usable.
+            Thread.interrupted();
+            ModelDownloadState prev = states.get(descriptor.id());
+            double prevFraction = prev == null ? 0.0 : prev.fraction();
+            if (cancelFlag.get() || (prev != null && prev.status() == ModelDownloadStatus.CANCELED)) {
+                update(new ModelDownloadState(
+                        descriptor,
+                        ModelDownloadStatus.CANCELED,
+                        prevFraction,
+                        descriptor.displayName() + " download canceled (partial progress saved).",
+                        null
+                ));
+            } else {
+                update(new ModelDownloadState(descriptor, ModelDownloadStatus.FAILED, prevFraction, "Download interrupted.", "Download interrupted."));
+            }
         } catch (Exception e) {
-            update(new ModelDownloadState(descriptor, ModelDownloadStatus.FAILED, 0.0, "Download failed. Try again.", userMessage(e)));
+            Thread.interrupted();
+            ModelDownloadState prev = states.get(descriptor.id());
+            double prevFraction = prev == null ? 0.0 : prev.fraction();
+            if (cancelFlag.get() || (prev != null && prev.status() == ModelDownloadStatus.CANCELED)) {
+                update(new ModelDownloadState(
+                        descriptor,
+                        ModelDownloadStatus.CANCELED,
+                        prevFraction,
+                        descriptor.displayName() + " download canceled (partial progress saved).",
+                        null
+                ));
+            } else {
+                update(new ModelDownloadState(descriptor, ModelDownloadStatus.FAILED, prevFraction, "Download failed. Try again.", userMessage(e)));
+            }
+        } finally {
+            futures.remove(descriptor.id());
         }
     }
 
@@ -117,6 +198,9 @@ public final class ModelDownloadService implements AutoCloseable {
         }
         if (message.contains("invalid")) {
             return "Model file is invalid. Delete and re-download.";
+        }
+        if (message.contains("integrity")) {
+            return "Downloaded model failed SHA-256 verification. Try again.";
         }
         return "Download failed. Try again.";
     }

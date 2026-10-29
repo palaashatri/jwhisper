@@ -1,6 +1,7 @@
 package com.jwhisper.audio;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -13,7 +14,7 @@ import java.util.stream.Stream;
 
 public final class AudioInputAgent {
     private static final List<String> ORDERED_EXTENSIONS = List.of(
-            "wav", "mp3", "m4a", "flac", "ogg", "aac",
+            "wav", "mp3", "m4a", "flac", "ogg", "aac", "opus", "wma", "aiff", "aif", "caf",
             "mp4", "mkv", "mov", "webm", "avi", "m4v"
     );
     private static final Set<String> SUPPORTED_EXTENSIONS = Set.copyOf(ORDERED_EXTENSIONS);
@@ -88,7 +89,7 @@ public final class AudioInputAgent {
             } else {
                 uniqueFiles.addAll(mediaInFolder);
             }
-        } catch (IOException e) {
+        } catch (IOException | UncheckedIOException e) {
             skipped.add(directory.getFileName() + ": Could not read folder.");
         }
     }

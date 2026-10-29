@@ -10,6 +10,13 @@ import java.nio.file.Path;
 public interface WhisperEngineAgent extends AutoCloseable {
     void loadModel(ModelDescriptor descriptor, Path modelRoot) throws WhisperException;
 
+    default void unloadModel(ModelDescriptor descriptor) {
+    }
+
+    default String activeProviderDisplayName() {
+        return "CPU";
+    }
+
     TranscriptionResult transcribeResult(TranscriptionJob job, TranscriptionListener listener) throws WhisperException;
 
     default String transcribe(TranscriptionJob job, TranscriptionListener listener) throws WhisperException {

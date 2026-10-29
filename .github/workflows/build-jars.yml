@@ -96,7 +96,11 @@ jobs:
           grep -Fq "my fellow americans" <<<"$normalized"
           grep -Fq "your country" <<<"$normalized"
           grep -Fq "do for you" <<<"$normalized"
-          grep -Fq -- "-->" build-jfk.srt
+          grep -Eq '^1$' build-jfk.srt
+          grep -Eq '^[0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3} --> [0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3}$' build-jfk.srt
+          srt_normalized="$(tr '[:upper:]' '[:lower:]' < build-jfk.srt)"
+          grep -Fq "my fellow americans" <<<"$srt_normalized"
+          grep -Fq "your country" <<<"$srt_normalized"
           cat build-jfk.txt
 
       - name: Upload reference transcript
